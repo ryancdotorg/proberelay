@@ -42,8 +42,8 @@ will likely be closed without response.
 
 ## TODO
 
-[ ] See about using PF_PACKET sockets directly rather than libpcap.
-[ ] Automatically set snaplen based on PMTU.
+* See about using PF_PACKET sockets directly rather than libpcap.
+* Automatically set snaplen based on PMTU.
 
 ## WONTFIX
 
