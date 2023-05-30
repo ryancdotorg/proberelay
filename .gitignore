@@ -1,0 +1,48 @@
+# Ingore all
+*
+# Unignore files with extensions
+!*.*
+# Unignore directories
+!*/
+# Unignore some specific files
+!Makefile
+!.git*
+
+# Object files
+*.o
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+
+# Python byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+
+# Pcap files
+*.pcap
+*.pcapng
+
+# Logs
+*.log
+
+# Compressed and archive files
+*.br
+*.gz
+*.xz
+*.lz4
+*.bz2
+*.zst
+*.zip
+*.tar
