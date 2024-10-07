@@ -8,6 +8,11 @@
 !Makefile
 !.git*
 
+# temp files
+*.swp
+*.bak
+*~
+
 # Object files
 *.o
 

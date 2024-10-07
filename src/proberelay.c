@@ -3,7 +3,9 @@ Copyright ©2023 Ryan Castellucci, some rights reserved.
 gcc -O2 -std=c11 -Wall -Wextra -pedantic proberelay.c -lpcap -o proberelay #*/
 
 // asprintf
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 
 #include <string.h>
 #include <stdbool.h>
