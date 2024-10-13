@@ -897,12 +897,12 @@ int main(int argc, char *argv[]) {
     c->snaplen = MTU - (IP4_HDR_LEN + UDP_HDR_LEN + sizeof(struct header_s));
     struct sockaddr_in *sin = (struct sockaddr_in *)ai->ai_addr;
     inet_ntop(AF_INET, &sin->sin_addr, addrstr, sizeof(addrstr));
-    snprintf(dststr, sizeof(dststr), "%s:%u", addrstr, sin->sin_port);
+    snprintf(dststr, sizeof(dststr), "%s:%u", addrstr, ntohs(sin->sin_port));
   } else if (ai->ai_family == AF_INET6) {
     c->snaplen = MTU - (IP6_HDR_LEN + UDP_HDR_LEN + sizeof(struct header_s));
     struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)ai->ai_addr;
     inet_ntop(AF_INET6, &sin6->sin6_addr, addrstr, sizeof(addrstr));
-    snprintf(dststr, sizeof(dststr), "[%s]:%u", addrstr, sin6->sin6_port);
+    snprintf(dststr, sizeof(dststr), "[%s]:%u", addrstr, ntohs(sin6->sin6_port));
   } else {
     fprintf(stderr, "Unexpected address family: %d\n", ai->ai_family);
     return -1;
