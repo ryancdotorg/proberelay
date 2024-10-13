@@ -473,13 +473,11 @@ static ssize_t read_raw(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
       h->ts_sec = ts.tv_sec;
       h->ts_fsec = TS_SCALE(ts.tv_nsec);
       break;
-#ifdef CLOCK_REALTIME_COARSE
     case TS_COARSE:
       clock_gettime(CLOCK_REALTIME_COARSE, &ts);
       h->ts_sec = ts.tv_sec;
       h->ts_fsec = TS_SCALE(ts.tv_nsec);
       break;
-#endif
     case TS_NONE:
       h->ts_sec = 0;
       h->ts_fsec = 0;
