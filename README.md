@@ -5,7 +5,20 @@ interface to another host over UDP.
 
 ## Usage
 
-`proberelay IFACE HOST PORT [FILTER]`
+```
+Usage: bin/proberelay [OPTIONS] ...
+
+  -i IFNAME                         name of capture interface (required)
+  -d HOST                           host to send probes to (required)
+  -p PORT                           port to send probes to (default: 26737)
+  -x SSID                           ssid to ignore (multiple allowed)
+  -r SIGNAL                         minimum signal strength (-127 to -1)
+  -t kernel|system|coarse|none      timestamp type (default: kernel)
+```
+
+For example:
+
+`proberelay -i mon0 -d 192.0.2.7 -r -80 -x tsunami -x 'Free Public WiFi'`
 
 The network interface must be in monitor mode.
 
@@ -42,7 +55,6 @@ will likely be closed without response.
 
 ## TODO
 
-* See about using PF_PACKET sockets directly rather than libpcap.
 * Automatically set snaplen based on PMTU.
 
 ## WONTFIX

@@ -518,6 +518,17 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
   fprintf(stderr, " (%u octets)\n", h->incl_len);
 #endif
 
+  /* Even if the filter is set before the socket is bound to an interface,
+   * some packets still "leak" initially. We address this by setting an
+   * initial "filter" the accepts all packets, but truncates them to a single
+   * byte. Since no actual packets can be this small, this tells us that the
+   * filter is filtering, and we can set the "slow" filter.
+   *
+   * The slow filter parses the radiotap header in bpf which is rather
+   * tedious. When we get the first normal sized packet, we use it to
+   * initialize the "fast" filter, which computes and inlines the offsets we
+   * need to look at.
+   */
   if (c->filter_state != 2) {
     if (c->filter_state == 0) {
       if (h->incl_len == 1) {
@@ -532,7 +543,7 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
       if (fast_filter(c, pkt, pkt_sz) < 0) { exit(-1); }
       c->filter_state = 2;
     } else {
-      debugp("waiting for slow filter");
+      debugp("waiting for slow filter to activate");
       return;
     }
   }
