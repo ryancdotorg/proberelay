@@ -516,7 +516,7 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
   fprintf(stderr, " (%u octets)\n", h->incl_len);
 #endif
 
-  /* Even if the filter is set before the socket is bound to an interface,
+  /* Even if a filter is set before the socket is bound to an interface,
    * some packets still "leak" initially. We address this by setting an
    * initial "filter" the accepts all packets, but truncates them to a single
    * byte. Since no actual packets can be this small, this tells us that the
