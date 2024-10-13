@@ -9,6 +9,8 @@ PP ?= cpp
 LD ?= ld
 STRIP ?= strip
 
+BUILD_TIME ?= $(shell date --utc '+%Y-%m-%dT%H:%M:%SZ')
+
 VERSION ?= $(shell git describe --abbrev=0 --tags 2> /dev/null || printf '')
 VERSION_EXTRA ?=
 
@@ -32,53 +34,57 @@ endif
 
 CPPFLAGS ?=
 override CPPFLAGS += -D_ALL_SOURCE -D_GNU_SOURCE \
-	-D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
+	-D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 \
+	-DBUILD_TIME='"$(BUILD_TIME)"'
 
 ifneq ($(VERSION),)
-	override CPPFLAGS += -DVERSION=$(VERSION)
+	override CPPFLAGS += -DVERSION='"$(VERSION)"'
 endif
 
 ifneq ($(VERSION_EXTRA),)
-	override CPPFLAGS += -DVERSION_EXTRA=$(VERSION_EXTRA)
+	override CPPFLAGS += -DVERSION_EXTRA='"$(VERSION_EXTRA)"'
 endif
 
 CFLAGS ?= -Os
 override CFLAGS += -std=gnu17 -Wall -Wextra -pedantic
+LDFLAGS ?=
+
+DEBUG_FLAGS ?= -ggdb
+RELEASE_FLAGS ?= -DNDEBUG
 
 COMPILE = $(CC) $(CPPFLAGS) $(CFLAGS)
 
-all: bin/proberelay bin/proberelay_nopcap
+all: bin/proberelay
 
 bin/test_%: src/%.c
 	@mkdir -p $(@D)
-	$(COMPILE) -DTEST $< $(LDFLAGS) -o $@
+	$(COMPILE) -DTEST $(DEBUG_FLAGS) $< $(LDFLAGS) -o $@
 
 bin/proberelay: obj/proberelay.o
 	@mkdir -p $(@D)
-	$(COMPILE) $^ -lpcap $(LDFLAGS) -o $@
-
-bin/proberelay_nopcap: obj/proberelay_nopcap.o
-	@mkdir -p $(@D)
-	$(COMPILE) $^ $(LDFLAGS) -o $@
-
-bin/proberelay_stripped: bin/proberelay_nopcap
-	@mkdir -p $(@D)
-	cp $^ $@
+	$(COMPILE) $(RELEASE_FLAGS) $^ $(LDFLAGS) -o $@
 	$(STRIP) $@
 
-bin/linkinfo: obj/linkinfo.o
+bin/proberelay_debug: obj/proberelay_debug.o
 	@mkdir -p $(@D)
-	$(COMPILE) $^ $(LDFLAGS) -o $@
+	$(COMPILE) $(DEBUG_FLAGS) $^ $(LDFLAGS) -o $@
 
 # generic build rules
 obj/%.o: src/%.c src/%.h
 	@mkdir -p $(@D)
-	$(COMPILE) -c $< -o $@
+	$(COMPILE) $(RELEASE_FLAGS) -c $< -o $@
 
 obj/%.o: src/%.c
 	@mkdir -p $(@D)
-	$(COMPILE) -c $< -o $@
+	$(COMPILE) $(RELEASE_FLAGS) -c $< -o $@
 
+obj/%_debug.o: src/%.c src/%.h src/debugp.h
+	@mkdir -p $(@D)
+	$(COMPILE) $(DEBUG_FLAGS) -c $< -o $@
+
+obj/%_debug.o: src/%.c src/debugp.h
+	@mkdir -p $(@D)
+	$(COMPILE) $(DEBUG_FLAGS) -c $< -o $@
 
 # hack to force clean to run first *to completion* even for parallel builds
 # note that $(info ...) prints everything on one line

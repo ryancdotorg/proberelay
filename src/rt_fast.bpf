@@ -1,0 +1,11 @@
+ldb [65536]                 ; load first byte of frame control
+jne #0x40, drop             ; drop everything except probe requests
+ldh [65537]                 ; type and length of first probe request TLV
+sub #1                      ; type needs to be 0, length 1-32
+jset #0xffe0, drop          ; bad type and/or length if any of these are set
+ldb [16]                    ; load flags byte
+jset #0x40, drop            ; drop if frame failed FCS check
+ldb [32]                    ; load signal byte
+jle #0xa5, drop             ; drop if signal below -90dBm
+accept: ret #262144         ; truncate to snaplen
+drop: ret #0                ; drop the packet
