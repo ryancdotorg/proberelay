@@ -60,6 +60,11 @@ gcc -Os -std=gnu17 -Wall -Wextra -pedantic proberelay_nopcap.c -o proberelay_nop
 #define VERSION_EXTRA ""
 #endif
 
+#ifndef BPF_INST
+#define _BPFJ(I, J) (J == 0 ? 0 : (J - (I + 1)))
+#define BPF_INST(I, CODE, JT, JF, K) { CODE, _BPFJ(I, JT), _BPFJ(I, JF), K }
+#endif
+
 #define SIGNAL_NONE -128
 
 #define RT_OFFSET_UNKNOWN -1
@@ -260,64 +265,64 @@ static int slow_filter(struct capture_s *c) {
   uint32_t min_signal = c->min_signal & 0xff;
 
   struct sock_filter filter[] = {
-  /*   0 */ { 0x30,               0,               0, 0x00000003 }, // ldb [3]                     ; high byte of it_len
-  /*   1 */ { 0x64,               0,               0, 0x00000008 }, // lsh #8                      ; left shift into place
-  /*   2 */ { 0x07,               0,               0, 0x00000000 }, // tax                         ; save it
-  /*   3 */ { 0x30,               0,               0, 0x00000002 }, // ldb [2]                     ; low byte of it_len
-  /*   4 */ { 0x0c,               0,               0, 0x00000000 }, // add x                       ; calculate radiotap header len
-  /*   5 */ { 0x07,               0,               0, 0x00000000 }, // tax                         ; only x can be used as an offset
-  /*   6 */ { 0x50,               0,               0, 0x00000000 }, // ldb [x + 0]                 ; load first byte of frame control
-  /*   7 */ { 0x15,               0,  57 - (  7 + 1), 0x00000040 }, // jne #0x40, drop             ; drop everything except probe requests
-  /*   8 */ { 0x48,               0,               0, 0x00000018 }, // ldh [x + 24]                ; type and length of first probe request TLV
-  /*   9 */ { 0x14,               0,               0, 0x00000001 }, // sub #1                      ; type needs to be 0, length 1-32
-  /*  10 */ { 0x45,  57 - ( 10 + 1),               0, 0x0000ffe0 }, // jset #0xffe0, drop          ; bad type and/or length if any of these are set
-  /*  11 */ { 0x01,               0,               0, 0x00000008 }, // ldx #8                      ; set base data offset for radiotap header fields
-  /*  12 */ { 0x30,               0,               0, 0x00000007 }, // ldb [7]                     ; high byte of it_present
-  /*  13 */ { 0x45,               0,  23 - ( 13 + 1), 0x00000080 }, // jset #0x80, mb1, nmb        ; more bits?
-  /*  14 */ { 0x01,               0,               0, 0x0000000c }, // mb1: ldx #12                ; set base data offset
-  /*  15 */ { 0x30,               0,               0, 0x0000000b }, // ldb [11]                    ; high byte of second it_present
-  /*  16 */ { 0x45,               0,  23 - ( 16 + 1), 0x00000080 }, // jset #0x80, mb2, nmb        ; more bits?
-  /*  17 */ { 0x01,               0,               0, 0x00000010 }, // mb2: ldx #16                ; set base data offset
-  /*  18 */ { 0x30,               0,               0, 0x0000000f }, // ldb [15]                    ; high byte of third it_present
-  /*  19 */ { 0x45,               0,  23 - ( 19 + 1), 0x00000080 }, // jset #0x80, mb3, nmb        ; more bits?
-  /*  20 */ { 0x01,               0,               0, 0x00000014 }, // mb3: ldx #20                ; set base data offset
-  /*  21 */ { 0x30,               0,               0, 0x00000013 }, // ldb [19]                    ; high byte of fourth it_present
-  /*  22 */ { 0x45,  57 - ( 22 + 1),               0, 0x00000080 }, // jset #0x80, drop, nmb       ; too many bits!
-  /*  23 */ { 0x30,               0,               0, 0x00000004 }, // nmb: ldb [4]                ; low byte of first it_present
-  /*  24 */ { 0x45,               0,  30 - ( 24 + 1), 0x00000001 }, // jset #0x01, b0t, b0f        ; tsfn present?
-  /*  25 */ { 0x87,               0,               0, 0x00000000 }, // b0t: txa                    ; get data offset
-  /*  26 */ { 0x04,               0,               0, 0x0000000f }, // add #15                     ; tsfn is 8 bytes, with 8 byte aligment
-  /*  27 */ { 0x54,               0,               0, 0xfffffff8 }, // and #0xfffffff8             ; mask to alignment
-  /*  28 */ { 0x07,               0,               0, 0x00000000 }, // tax                         ; update data offset
-  /*  29 */ { 0x30,               0,               0, 0x00000004 }, // ldb [4]                     ; low byte of first it_present
-  /*  30 */ { 0x45,               0,  37 - ( 30 + 1), 0x00000002 }, // b0f: jset #0x02, b1t, b1f   ; flags present?
-  /*  31 */ { 0x50,               0,               0, 0x00000000 }, // b1t: ldb [x + 0]            ; load flags byte
-  /*  32 */ { 0x45,  57 - ( 32 + 1),               0, 0x00000040 }, // jset #0x40, drop            ; drop if frame failed FCS check
-  /*  33 */ { 0x87,               0,               0, 0x00000000 }, // txa                         ; load data offset
-  /*  34 */ { 0x04,               0,               0, 0x00000001 }, // add #1                      ; flags is 1 byte
-  /*  35 */ { 0x07,               0,               0, 0x00000000 }, // tax                         ; update data offset
-  /*  36 */ { 0x30,               0,               0, 0x00000004 }, // ldb [4]                     ; low byte of first it_present
-  /*  37 */ { 0x45,               0,  42 - ( 37 + 1), 0x00000004 }, // b1f: jset #0x04, b2t, b2f   ; rate present?
-  /*  38 */ { 0x87,               0,               0, 0x00000000 }, // b2t: txa                    ; get data offset
-  /*  39 */ { 0x04,               0,               0, 0x00000001 }, // add #1                      ; rate is 1 byte
-  /*  40 */ { 0x07,               0,               0, 0x00000000 }, // tax                         ; update data offset
-  /*  41 */ { 0x30,               0,               0, 0x00000004 }, // ldb [4]                     ; low byte of first it_present
-  /*  42 */ { 0x45,               0,  48 - ( 42 + 1), 0x00000008 }, // b2f: jset #0x08, b3t, b3f   ; channel present?
-  /*  43 */ { 0x87,               0,               0, 0x00000000 }, // b3t: txa                    ; get data offset
-  /*  44 */ { 0x04,               0,               0, 0x00000005 }, // add #5                      ; channel is 4 bytes, with 2 byte alignment
-  /*  45 */ { 0x54,               0,               0, 0xfffffffe }, // and #0xfffffffe             ; mask to alignment
-  /*  46 */ { 0x07,               0,               0, 0x00000000 }, // tax                         ; update data offset
-  /*  47 */ { 0x30,               0,               0, 0x00000004 }, // ldb [4]                     ; low byte of first it_present
-  /*  48 */ { 0x45,               0,  53 - ( 48 + 1), 0x00000010 }, // b3f: jset #0x10, b4t, b4f   ; fhss present?
-  /*  49 */ { 0x87,               0,               0, 0x00000000 }, // b4t: txa                    ; get data offset
-  /*  50 */ { 0x04,               0,               0, 0x00000002 }, // add #2                      ; fhss is 2 bytes
-  /*  51 */ { 0x07,               0,               0, 0x00000000 }, // tax                         ; update data offset
-  /*  52 */ { 0x30,               0,               0, 0x00000004 }, // ldb [4]                     ; low byte of first it_present
-  /*  53 */ { 0x45,               0,  56 - ( 53 + 1), 0x00000020 }, // b4f: jset #0x20, b5t, accept; signal present?
-  /*  54 */ { 0x50,               0,               0, 0x00000000 }, // b5t: ldb [x + 0]            ; load signal byte
-  /*  55 */ { 0x25,               0,  57 - ( 55 + 1), min_signal }, // jle #0xa5, drop             ; drop if signal too low
-  /*  56 */ { 0x06,               0,               0, 0x00040000 }, // accept: ret #262144         ; truncate to snaplen
-  /*  57 */ { 0x06,               0,               0, 0x00000000 }, // drop: ret #0                ; drop the packet
+    BPF_INST(  0, 0x30,   0,   0, 0x00000003), // ldb [3]                     ; high byte of it_len
+    BPF_INST(  1, 0x64,   0,   0, 0x00000008), // lsh #8                      ; left shift into place
+    BPF_INST(  2, 0x07,   0,   0, 0x00000000), // tax                         ; save it
+    BPF_INST(  3, 0x30,   0,   0, 0x00000002), // ldb [2]                     ; low byte of it_len
+    BPF_INST(  4, 0x0c,   0,   0, 0x00000000), // add x                       ; calculate radiotap header len
+    BPF_INST(  5, 0x07,   0,   0, 0x00000000), // tax                         ; only x can be used as an offset
+    BPF_INST(  6, 0x50,   0,   0, 0x00000000), // ldb [x + 0]                 ; load first byte of frame control
+    BPF_INST(  7, 0x15,   0,  57, 0x00000040), // jne #0x40, drop             ; drop everything except probe requests
+    BPF_INST(  8, 0x48,   0,   0, 0x00000018), // ldh [x + 24]                ; type and length of first probe request TLV
+    BPF_INST(  9, 0x14,   0,   0, 0x00000001), // sub #1                      ; type needs to be 0, length 1-32
+    BPF_INST( 10, 0x45,  57,   0, 0x0000ffe0), // jset #0xffe0, drop          ; bad type and/or length if any of these are set
+    BPF_INST( 11, 0x01,   0,   0, 0x00000008), // ldx #8                      ; set base data offset for radiotap header fields
+    BPF_INST( 12, 0x30,   0,   0, 0x00000007), // ldb [7]                     ; high byte of it_present
+    BPF_INST( 13, 0x45,   0,  23, 0x00000080), // jset #0x80, mb1, nmb        ; more bits?
+    BPF_INST( 14, 0x01,   0,   0, 0x0000000c), // mb1: ldx #12                ; set base data offset
+    BPF_INST( 15, 0x30,   0,   0, 0x0000000b), // ldb [11]                    ; high byte of second it_present
+    BPF_INST( 16, 0x45,   0,  23, 0x00000080), // jset #0x80, mb2, nmb        ; more bits?
+    BPF_INST( 17, 0x01,   0,   0, 0x00000010), // mb2: ldx #16                ; set base data offset
+    BPF_INST( 18, 0x30,   0,   0, 0x0000000f), // ldb [15]                    ; high byte of third it_present
+    BPF_INST( 19, 0x45,   0,  23, 0x00000080), // jset #0x80, mb3, nmb        ; more bits?
+    BPF_INST( 20, 0x01,   0,   0, 0x00000014), // mb3: ldx #20                ; set base data offset
+    BPF_INST( 21, 0x30,   0,   0, 0x00000013), // ldb [19]                    ; high byte of fourth it_present
+    BPF_INST( 22, 0x45,  57,   0, 0x00000080), // jset #0x80, drop, nmb       ; too many bits!
+    BPF_INST( 23, 0x30,   0,   0, 0x00000004), // nmb: ldb [4]                ; low byte of first it_present
+    BPF_INST( 24, 0x45,   0,  30, 0x00000001), // jset #0x01, b0t, b0f        ; tsfn present?
+    BPF_INST( 25, 0x87,   0,   0, 0x00000000), // b0t: txa                    ; get data offset
+    BPF_INST( 26, 0x04,   0,   0, 0x0000000f), // add #15                     ; tsfn is 8 bytes, with 8 byte aligment
+    BPF_INST( 27, 0x54,   0,   0, 0xfffffff8), // and #0xfffffff8             ; mask to alignment
+    BPF_INST( 28, 0x07,   0,   0, 0x00000000), // tax                         ; update data offset
+    BPF_INST( 29, 0x30,   0,   0, 0x00000004), // ldb [4]                     ; low byte of first it_present
+    BPF_INST( 30, 0x45,   0,  37, 0x00000002), // b0f: jset #0x02, b1t, b1f   ; flags present?
+    BPF_INST( 31, 0x50,   0,   0, 0x00000000), // b1t: ldb [x + 0]            ; load flags byte
+    BPF_INST( 32, 0x45,  57,   0, 0x00000040), // jset #0x40, drop            ; drop if frame failed FCS check
+    BPF_INST( 33, 0x87,   0,   0, 0x00000000), // txa                         ; load data offset
+    BPF_INST( 34, 0x04,   0,   0, 0x00000001), // add #1                      ; flags is 1 byte
+    BPF_INST( 35, 0x07,   0,   0, 0x00000000), // tax                         ; update data offset
+    BPF_INST( 36, 0x30,   0,   0, 0x00000004), // ldb [4]                     ; low byte of first it_present
+    BPF_INST( 37, 0x45,   0,  42, 0x00000004), // b1f: jset #0x04, b2t, b2f   ; rate present?
+    BPF_INST( 38, 0x87,   0,   0, 0x00000000), // b2t: txa                    ; get data offset
+    BPF_INST( 39, 0x04,   0,   0, 0x00000001), // add #1                      ; rate is 1 byte
+    BPF_INST( 40, 0x07,   0,   0, 0x00000000), // tax                         ; update data offset
+    BPF_INST( 41, 0x30,   0,   0, 0x00000004), // ldb [4]                     ; low byte of first it_present
+    BPF_INST( 42, 0x45,   0,  48, 0x00000008), // b2f: jset #0x08, b3t, b3f   ; channel present?
+    BPF_INST( 43, 0x87,   0,   0, 0x00000000), // b3t: txa                    ; get data offset
+    BPF_INST( 44, 0x04,   0,   0, 0x00000005), // add #5                      ; channel isis 4 bytes, with 2 byte alignment
+    BPF_INST( 45, 0x54,   0,   0, 0xfffffffe), // and #0xfffffffe             ; mask to alignment
+    BPF_INST( 46, 0x07,   0,   0, 0x00000000), // tax                         ; update data offset
+    BPF_INST( 47, 0x30,   0,   0, 0x00000004), // ldb [4]                     ; low byte of first it_present
+    BPF_INST( 48, 0x45,   0,  53, 0x00000010), // b3f: jset #0x10, b4t, b4f   ; fhss present?
+    BPF_INST( 49, 0x87,   0,   0, 0x00000000), // b4t: txa                    ; get data offset
+    BPF_INST( 50, 0x04,   0,   0, 0x00000002), // add #2                      ; fhss  2 bytes
+    BPF_INST( 51, 0x07,   0,   0, 0x00000000), // tax                         ; update data offset
+    BPF_INST( 52, 0x30,   0,   0, 0x00000004), // ldb [4]                     ; low byte of first it_present
+    BPF_INST( 53, 0x45,   0,  56, 0x00000020), // b4f: jset #0x20, b5t, accept; signal present?
+    BPF_INST( 54, 0x50,   0,   0, 0x00000000), // b5t: ldb [x + 0]            ; load signal byte
+    BPF_INST( 55, 0x25,   0,  57, min_signal), // jle #0xc3, drop             ; drop if signal below threshold
+    BPF_INST( 56, 0x06,   0,   0, 0x00040000), // accept: ret #262144         ; truncate to snaplen
+    BPF_INST( 57, 0x06,   0,   0, 0x00000000), // drop: ret #0                ; drop the packet
   };
 
   struct sock_fprog prog = {
@@ -528,7 +533,11 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
    * need to look at.
    */
   if (c->filter_state != 2) {
-    if (c->filter_state == 0) {
+    if ((c->filter_state == 1 && h->incl_len > 1) || c->linktype == DLT_IEEE802_11) {
+      debugp("setting fast filter");
+      if (fast_filter(c, pkt, pkt_sz) < 0) { exit(-1); }
+      c->filter_state = 2;
+    } else if (c->filter_state == 0) {
       if (h->incl_len == 1) {
         debugp("setting slow filter");
         if (slow_filter(c) < 0) { exit(-1); }
@@ -536,10 +545,6 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
       }
 
       return;
-    } else if (c->filter_state == 1 && h->incl_len > 1) {
-      debugp("setting fast filter");
-      if (fast_filter(c, pkt, pkt_sz) < 0) { exit(-1); }
-      c->filter_state = 2;
     } else {
       debugp("waiting for slow filter to activate");
       return;
@@ -775,7 +780,7 @@ int main(int argc, char *argv[]) {
         usage(stdout, argv[0]);
         return 0;
       case 'V':
-        printf("proberelay %s built %s\n", VERSION VERSION_EXTRA, BUILD_TIME);
+        printf("proberelay " VERSION VERSION_EXTRA " built " BUILD_TIME "\n");
         return 0;
       case 'i':
         if (ifname == NULL) {
@@ -829,7 +834,7 @@ int main(int argc, char *argv[]) {
             return -1;
           }
         } else {
-          fprintf(stderr, "Multiple `-t` options not supported!\n");
+          fprintf(stderr, "Multiple `-%c` options not supported!\n", opt);
           return -1;
         }
         break;

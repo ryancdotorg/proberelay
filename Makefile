@@ -1,3 +1,4 @@
+ORIG_MAKEFLAGS ::= $(MAKEFLAGS)
 MAKEFLAGS += --no-builtin-rules
 export LANG=C LC_ALL=C
 
@@ -56,6 +57,12 @@ COMPILE = $(CC) $(CPPFLAGS) $(CFLAGS)
 
 all: bin/proberelay
 
+linux_tools/bpf_asm: linux_tools/Makefile linux_tools/bpf_asm.c linux_tools/bpf_exp.y linux_tools/bpf_exp.l
+	MAKEFLAGS=$(ORIG_MAKEFLAGS) $(MAKE) -C linux_tools bpf_asm LDFLAGS=-static
+
+linux_tools/bpf_dbg: linux_tools/Makefile linux_tools/bpf_dbg.c linux_tools/bpf_exp.y linux_tools/bpf_exp.l
+	MAKEFLAGS=$(ORIG_MAKEFLAGS) $(MAKE) -C linux_tools bpf_dbg
+
 bin/test_%: src/%.c
 	@mkdir -p $(@D)
 	$(COMPILE) -DTEST $(DEBUG_FLAGS) $< $(LDFLAGS) -o $@
@@ -63,7 +70,11 @@ bin/test_%: src/%.c
 bin/proberelay: obj/proberelay.o
 	@mkdir -p $(@D)
 	$(COMPILE) $(RELEASE_FLAGS) $^ $(LDFLAGS) -o $@
-	$(STRIP) $@
+	$(STRIP) -s $@
+
+bin/proberelay_sym: obj/proberelay.o
+	@mkdir -p $(@D)
+	$(COMPILE) $(RELEASE_FLAGS) $^ $(LDFLAGS) -o $@
 
 bin/proberelay_debug: obj/proberelay_debug.o
 	@mkdir -p $(@D)
@@ -90,6 +101,7 @@ obj/%_debug.o: src/%.c src/debugp.h
 # note that $(info ...) prints everything on one line
 clean: _nop $(foreach _,$(filter clean,$(MAKECMDGOALS)),$(info $(shell $(MAKE) _clean)))
 _clean:
+	$(MAKE) -C linux_tools clean
 	rm -rf obj bin gen || /bin/true
 _nop:
 	@true

@@ -51,3 +51,9 @@ __pycache__/
 *.zst
 *.zip
 *.tar
+
+# linux_tools
+linux_tools/bpf_dbg
+linux_tools/bpf_dbg
+linux_tools/bpf_exp.yacc.*
+linux_tools/bpf_exp.lex.*

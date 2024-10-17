@@ -7,8 +7,22 @@ eprint = partial(print, file=stderr)
 # Python standard library imports
 import re
 # Third party library imports
-import bpf_asm
 # End imports
+
+def _assemble(code):
+    from subprocess import check_output
+    bytecode = check_output(['linux_tools/bpf_asm'], encoding='utf-8', input=code)
+    prog = []
+    for inst in bytecode.split(',')[1:-1]:
+        prog.append(tuple(map(int, inst.split(' '))))
+
+    return prog
+
+try:
+    from bpf_asm import assemble
+except ModuleNotFoundError:
+    def assemble(*a, **kw):
+        return _assemble(*a, **kw)
 
 # 0 association request
 # 1 association response
@@ -29,15 +43,18 @@ def print_detail(asm):
         line = line.strip()
         if line: asm_lines.append(line)
 
-    prog = bpf_asm.assemble('\n'.join(asm_lines) + '\n')
+    prog = assemble('\n'.join(asm_lines) + '\n')
 
     for i, tup in enumerate(zip(asm_lines, prog)):
         line, insn = tup
         code, jt, jf, k = insn
         jt_a, jf_a = '0', '0'
+        jt_i, jf_i = 0, 0
         #if code & 0x0f == 0x05:
         if jt: jt_a = f'{(jt + i + 1):3d} - ({i:3d} + 1)'
         if jf: jf_a = f'{(jf + i + 1):3d} - ({i:3d} + 1)'
+        if jt: jt_i = jt + i + 1
+        if jf: jf_i = jf + i + 1
 
         if m := re.fullmatch(r'(.*?)(?:\s*(?:;|/[*])\s*(.*?)(?:\s*[*]/\s*)?)?', line):
             asm, comment = m.groups()
@@ -46,9 +63,15 @@ def print_detail(asm):
         else:
             src = ''
 
-        print(f'/* {i:3d} */ {{ 0x{code:02x}, {jt_a:>15}, {jf_a:>15}, 0x{k:08x} }},{src}')
+        #print(f'/* {i:3d} */ {{ 0x{code:02x}, {jt_a:>15}, {jf_a:>15}, 0x{k:08x} }},{src}')
+        print(f'  BPF_INST({i:3d}, 0x{code:02x}, {jt_i:3d}, {jf_i:3d}, 0x{k:08x}),{src}')
 
 if len(argv) == 3:
+    #print('#ifndef BPF_INST')
+    #print('#define _BPFJ(I, J) (J == 0 ? 0 : (J - (I + 1)))')
+    #print('#define BPF_INST(I, CODE, JT, JF, K) { CODE, _BPFJ(I, JT), _BPFJ(I, JF), K }')
+    #print('#endif')
+    #print('')
     print(f'struct sock_filter {argv[1]}[] = {{')
     print_detail(open(argv[2]).read())
     print('};')
