@@ -16,14 +16,11 @@ gcc -Os -std=gnu17 -Wall -Wextra -pedantic proberelay_nopcap.c -o proberelay_nop
 #include <endian.h>
 #include <errno.h>
 #include <stdio.h>
-
-#include <time.h>
-
-#include <poll.h>
-
-#include <grp.h>
-
 #include <netdb.h>
+#include <time.h>
+#include <poll.h>
+#include <pwd.h>
+#include <grp.h>
 
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -512,24 +509,8 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
     }
   }
 
-#ifndef NDEBUG
-  debugp("send packet %p %p\n", (void *)c, buf);
-#endif
+  debugp("send packet %p %p", (void *)c, buf);
   send_packet(c, buf);
-}
-
-// chroot, first creating directory if required
-static int do_chroot(char *dir) {
-  int rv = 0;
-
-  if (access(dir, R_OK|X_OK) != 0) {
-    // assume it doesn't exist...
-    if ((rv = mkdir(dir, 0555)) != 0) { perror("mkdir"); return rv; }
-  }
-  if ((rv = chroot(dir)) != 0) { perror("chroot"); return rv; }
-  if ((rv = chdir("/")) != 0) { perror("chdir"); return rv; }
-
-  return rv;
 }
 
 // set uid/gid to nobody/nogroup
@@ -537,13 +518,27 @@ static int droproot() {
   int rv = 0;
 
   if (getuid() == 0) {
+#if !defined(UNPRIV_GID) || !defined(UNPRIV_UID)
+    struct passwd *pwd;
+    if ((pwd = getpwnam("nobody")) == NULL) { perror("getpwnam"); return -1; }
+#endif
+#ifndef UNPRIV_GID
+#define UNPRIV_GID pwd->pw_gid
+#endif
+#ifndef UNPRIV_UID
+#define UNPRIV_UID pwd->pw_uid
+#endif
+    char dir[] = "/var/empty";
     // groups can't be dropped once setuid is called, so do them first
     if ((rv = setgroups(0, NULL)) !=0 ) { perror("setgroups"); return rv; }
-    if ((rv = setgid(65534)) != 0) { perror("setgid"); return rv; }
-
-    if ((rv = do_chroot("/var/empty")) != 0) return rv;
-
-    if ((rv = setuid(65534)) != 0) { perror("setuid"); return rv; }
+    if ((rv = setgid(UNPRIV_GID)) != 0) { perror("setgid"); return rv; }
+    if (access(dir, R_OK|X_OK) != 0) {
+      // assume it doesn't exist...
+      if ((rv = mkdir(dir, 0555)) != 0) { perror("mkdir"); return rv; }
+    }
+    if ((rv = chroot(dir)) != 0) { perror("chroot"); return rv; }
+    if ((rv = chdir("/")) != 0) { perror("chdir"); return rv; }
+    if ((rv = setuid(UNPRIV_UID)) != 0) { perror("setuid"); return rv; }
   }
 
   return rv;

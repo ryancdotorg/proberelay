@@ -46,6 +46,14 @@ ifneq ($(VERSION_EXTRA),)
 	override CPPFLAGS += -DVERSION_EXTRA='"$(VERSION_EXTRA)"'
 endif
 
+ifneq ($(UNPRIV_GID),)
+	override CPPFLAGS += -DUNPRIV_GID=$(UNPRIV_GID)
+endif
+
+ifneq ($(UNPRIV_UID),)
+	override CPPFLAGS += -DUNPRIV_UID=$(UNPRIV_UID)
+endif
+
 CFLAGS ?= -Os
 override CFLAGS += -std=gnu17 -Wall -Wextra -pedantic
 LDFLAGS ?=
