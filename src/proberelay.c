@@ -1,11 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
 Copyright ©2024 Ryan Castellucci, some rights reserved.
-gcc -Os -std=gnu17 -Wall -Wextra -pedantic proberelay_nopcap.c -o proberelay_nopcap #*/
-
-// asprintf
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
+gcc -Os -std=gnu17 -Wall -Wextra -pedantic proberelay.c -o proberelay #*/
 
 #include <string.h>
 #include <stdbool.h>
@@ -26,7 +21,6 @@ gcc -Os -std=gnu17 -Wall -Wextra -pedantic proberelay_nopcap.c -o proberelay_nop
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 
 #include <net/if.h>
 #include <net/ethernet.h>
@@ -230,17 +224,17 @@ static int rt_field_offset(const uint8_t *pkt, unsigned field) {
   return field_offset;
 }
 
-static inline int _set_filter(int fd, struct sock_fprog *prog) {
+static inline int attach_filter(int fd, struct sock_fprog *prog) {
   return setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER, prog, sizeof(struct sock_fprog));
 }
 
 // wrapper to attach a filter without leaking unfiltered packets
 // https://natanyellin.com/posts/ebpf-filtering-done-right/
-static int attach_filter(struct capture_s *c, struct sock_fprog *prog) {
+static int apply_filter(struct capture_s *c, struct sock_fprog *prog) {
   // drop all
   struct sock_fprog drop = { 1, &(struct sock_filter){ 6, 0, 0, 0 } };
 
-  if (_set_filter(c->cap_fd, &drop) < 0) {
+  if (attach_filter(c->cap_fd, &drop) < 0) {
     perror("setsockopt (attach drop)");
     return -1;
   }
@@ -260,7 +254,7 @@ static int attach_filter(struct capture_s *c, struct sock_fprog *prog) {
   fprintf(stderr, "\n");
 #endif
 
-  if (_set_filter(c->cap_fd, prog) < 0) {
+  if (attach_filter(c->cap_fd, prog) < 0) {
     perror("setsockopt (attach filter)");
     return -1;
   }
@@ -315,35 +309,46 @@ static int calc_filter(struct capture_s *c, const uint8_t *pkt, size_t pkt_sz) {
   int i = 0;
 
   // ldb[c->wlan_offset]        ; load first byte of frame control
+  // BPF_LD | BPF_B | BPF_ABS
   set_inst(filter, i++, 0x30, 0, 0, c->wlan_offset);
   // jne #0x40, drop            ; drop everything except probe requests
+  // BPF_JMP | BPF_JEQ
   set_inst(filter, i++, 0x15, 0, jsig + jflg + 4, 0x40);
   // ldh[c->wlan_offset + 24]   ; type and length of first probe request TLV
+  // BPF_LD | BPF_H | BPF_ABS
   set_inst(filter, i++, 0x28, 0, 0, c->wlan_offset + 24);
   // sub #1                     ; type needs to be 0, length 1-32
+  // BPF_ALU | BPF_SUB
   set_inst(filter, i++, 0x14, 0, 0, 1);
   // jset #0xffe0, drop         ; bad type and/or length if any of these are
+  // BPF_JMP | BPF_JSET
   set_inst(filter, i++, 0x45, jsig + jflg + 1, 0, 0xffe0);
   if (jsig > 0) {
     // ldb [c->signal_offset]   ; radiotap signal byte
+    // BPF_LD | BPF_B | BPF_ABS
     set_inst(filter, i++, 0x30, 0, 0, c->signal_offset);
     // jlt #c->min_signal, drop ; drop if less than specified signal
+    // BPF_JMP | BPF_JGE
     set_inst(filter, i++, 0x35, 0, jflg + 1, c->min_signal & 0xff);
   }
   if (jflg > 0) {
     // ldb [c->flags_offset]    ; radiotap flags byte
+    // BPF_LD | BPF_B | BPF_ABS
     set_inst(filter, i++, 0x30, 0, 0, c->flags_offset);
     // jset #0x40, drop         ; drop if frame failed FCS check
+    // BPF_JMP | BPF_JSET
     set_inst(filter, i++, 0x45, 1, 0, 0x40);
   }
   // accept: ret c->snaplen     ; truncate to snaplen
+  // BPF_RET
   set_inst(filter, i++, 0x06, 0, 0, c->snaplen);
   // drop: ret #0               ; drop the packet
+  // BPF_RET
   set_inst(filter, i++, 0x06, 0, 0, 0);
 
   prog.len = i;
 
-  if (attach_filter(c, &prog) < 0) {
+  if (apply_filter(c, &prog) < 0) {
     return -1;
   }
 
@@ -403,7 +408,7 @@ static ssize_t read_raw(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
     perror("recvmsg");
     return -1;
   } else if (orig_len > INT32_MAX) {
-    fprintf(stderr, "bogus packet length: %zd\n", orig_len);
+    fprintf(stderr, "Bogus packet length: %zd\n", orig_len);
     return -1;
   }
 
@@ -475,7 +480,7 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
   // rather than trying to parse the radiotap header in the filter, we examine
   // the radiotap header and generate an appropriate filter at runtime
   if (c->wlan_offset == RT_OFFSET_UNKNOWN) {
-    debugp("setting fast filter");
+    debugp("setting filter");
     if (calc_filter(c, pkt, pkt_sz) < 0) { exit(-1); }
     // drop the unfiltered packet
     return;
@@ -486,22 +491,9 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
     unsigned exclude_len, exclude_pos = 0;
     uint8_t *ssid = pkt + c->wlan_offset + 25;
 
-#ifndef NDEBUG
-    uint8_t ssid_buf[33];
-    memcpy(ssid_buf, ssid + 1, ssid[0]);
-    ssid_buf[ssid[0]] = '\0';
-    fprintf(stderr, "Check SSID: `%s` (%u octets)\n", ssid_buf, ssid[0]);
-#endif
-
     while ((exclude_len = c->exclude[exclude_pos]) > 0) {
-
       if (memcmp(ssid, c->exclude + exclude_pos, exclude_len + 1) == 0) {
-#ifndef NDEBUG
-        uint8_t exclude_buf[33];
-        memcpy(exclude_buf, c->exclude + exclude_pos + 1, exclude_len);
-        exclude_buf[exclude_len] = '\0';
-        fprintf(stderr, "Excluded SSID: `%s` (%u octets)\n", exclude_buf, exclude_len);
-#endif
+        debugp("ssid filtered");
         return;
       }
 
