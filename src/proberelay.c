@@ -286,20 +286,36 @@ static int calc_filter(struct capture_s *c, const uint8_t *pkt, size_t pkt_sz) {
   if (c->linktype == DLT_IEEE802_11_RADIO) {
     // per radiotap spec
     c->wlan_offset = le16toh(*((uint16_t *)(pkt + 2)));
-    printf("Found radiotap header length: %d\n", c->wlan_offset);
     // find the flags offset (if present)
     c->flags_offset = rt_field_offset(pkt, RT_FLAGS);
     // find the signal offset (if present);
-    c->signal_offset = rt_field_offset(pkt, RT_DBM_SIGNAL);
+    if (c->min_signal < 0) {
+      c->signal_offset = rt_field_offset(pkt, RT_DBM_SIGNAL);
+    } else {
+      c->signal_offset = rt_field_offset(pkt, RT_DB_SIGNAL);
+    }
   } else {
     c->wlan_offset = 0;
     c->flags_offset = RT_OFFSET_NONE;
     c->signal_offset = RT_OFFSET_NONE;
   }
 
+  int jflg, jsig;
+  if (c->flags_offset < 0) {
+    fprintf(stderr, "Unable to filter bad frame checksums.\n");
+    jflg = 0;
+  } else {
+    jflg = 2;
+  }
+
+  if (c->min_signal != SIGNAL_NONE && c->signal_offset >= 0) {
+    fprintf(stderr, "Unable to filter on signal.\n");
+    jsig = 0;
+  } else {
+    jsig = 2;
+  }
+
   int i = 0;
-  int jflg = c->flags_offset >= 0 ? 2 : 0;
-  int jsig = (c->min_signal != SIGNAL_NONE && c->signal_offset >= 0) ? 2 : 0;
 
   // ldb[c->wlan_offset]        ; load first byte of frame control
   set_inst(filter, i++, 0x30, 0, 0, c->wlan_offset);
@@ -664,7 +680,7 @@ void usage(FILE *f, char *argv0) {
     "  -d HOST                           host to send probes to (required)\n"
     "  -p PORT                           port to send probes to (default: 26737)\n"
     "  -x SSID                           ssid to ignore (multiple allowed)\n"
-    "  -r SIGNAL                         minimum signal strength (-127 to -1)\n"
+    "  -r SIGNAL                         minimum signal strength (-127 to 255)\n"
     "  -t kernel|system|coarse|none      timestamp type (default: kernel)\n"
     , argv0
   );
@@ -722,8 +738,8 @@ int main(int argc, char *argv[]) {
         if (c->min_signal == SIGNAL_NONE) {
           c->min_signal = atoi(optarg);
           debugp("min signal: %d", c->min_signal);
-          if (c->min_signal < -127 || c->min_signal > -1) {
-            fprintf(stderr, "Value for `-%c` must be -127 to -1, not %d!\n", opt, c->min_signal);
+          if (c->min_signal < -127 || c->min_signal > 255) {
+            fprintf(stderr, "Value for `-%c` must be -127 to 255, not %d!\n", opt, c->min_signal);
             return -1;
           }
         } else {

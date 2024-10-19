@@ -12,7 +12,7 @@ Usage: bin/proberelay [OPTIONS] ...
   -d HOST                           host to send probes to (required)
   -p PORT                           port to send probes to (default: 26737)
   -x SSID                           ssid to ignore (multiple allowed)
-  -r SIGNAL                         minimum signal strength (-127 to -1)
+  -r SIGNAL                         minimum signal strength (-127 to 255)
   -t kernel|system|coarse|none      timestamp type (default: kernel)
 ```
 
@@ -21,6 +21,12 @@ For example:
 `proberelay -i mon0 -d 192.0.2.7 -r -80 -x tsunami -x 'Free Public WiFi'`
 
 The network interface must be in monitor mode.
+
+### Minimum Signal Strength
+
+Radiotap has two fields for signal strength, one in standard dBm, and one in
+dB difference from “an arbitrary, fixed reference”. Negative values will be
+compared against dBm, zero or positive ones will be compared against dB.
 
 ## Features
 
