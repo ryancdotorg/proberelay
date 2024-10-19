@@ -145,7 +145,6 @@ struct capture_s {
   int cap_fd;
   int dst_fd;
   int linktype;
-  int filter_state;
   int wlan_offset;
   int flags_offset;
   int signal_offset;
@@ -249,8 +248,9 @@ static int attach_filter(struct capture_s *c, struct sock_fprog *prog) {
     return -1;
   }
 
+  // read until we get an error meaing no more data to read
+  for (int n = 0; n >= 0; n = recv(c->cap_fd, (void *)&drop, 1, MSG_DONTWAIT)) {}
 
-static int attach_filter(struct capture_s *c, struct sock_fprog *prog) {
 #ifndef NDEBUG
   fprintf(stderr, "%u,", prog->len);
   for (unsigned i = 0; i < prog->len; ++i) {
@@ -263,92 +263,12 @@ static int attach_filter(struct capture_s *c, struct sock_fprog *prog) {
   fprintf(stderr, "\n");
 #endif
 
-  if (setsockopt(c->cap_fd, SOL_SOCKET, SO_ATTACH_FILTER, prog, sizeof(struct sock_fprog)) < 0) {
+  if (_set_filter(c->cap_fd, prog) < 0) {
     perror("setsockopt (attach filter)");
     return -1;
   }
 
   return 0;
-}
-
-static int one_filter(struct capture_s *c) {
-  // truncate the packet to one byte
-  struct sock_filter filter[] = { { 0x06, 0, 0, 1} };
-  struct sock_fprog prog = { .len = 1, .filter = filter };
-
-  return attach_filter(c, &prog);
-}
-
-static int slow_filter(struct capture_s *c) {
-  uint32_t min_signal = c->min_signal & 0xff;
-
-  struct sock_filter filter[] = {
-    BPF_INST(  0, 0x30,   0,   0, 0x00000003), // ldb [3]                     ; high byte of it_len
-    BPF_INST(  1, 0x64,   0,   0, 0x00000008), // lsh #8                      ; left shift into place
-    BPF_INST(  2, 0x07,   0,   0, 0x00000000), // tax                         ; save it
-    BPF_INST(  3, 0x30,   0,   0, 0x00000002), // ldb [2]                     ; low byte of it_len
-    BPF_INST(  4, 0x0c,   0,   0, 0x00000000), // add x                       ; calculate radiotap header len
-    BPF_INST(  5, 0x07,   0,   0, 0x00000000), // tax                         ; only x can be used as an offset
-    BPF_INST(  6, 0x50,   0,   0, 0x00000000), // ldb [x + 0]                 ; load first byte of frame control
-    BPF_INST(  7, 0x15,   0,  57, 0x00000040), // jne #0x40, drop             ; drop everything except probe requests
-    BPF_INST(  8, 0x48,   0,   0, 0x00000018), // ldh [x + 24]                ; type and length of first probe request TLV
-    BPF_INST(  9, 0x14,   0,   0, 0x00000001), // sub #1                      ; type needs to be 0, length 1-32
-    BPF_INST( 10, 0x45,  57,   0, 0x0000ffe0), // jset #0xffe0, drop          ; bad type and/or length if any of these are set
-    BPF_INST( 11, 0x01,   0,   0, 0x00000008), // ldx #8                      ; set base data offset for radiotap header fields
-    BPF_INST( 12, 0x30,   0,   0, 0x00000007), // ldb [7]                     ; high byte of it_present
-    BPF_INST( 13, 0x45,   0,  23, 0x00000080), // jset #0x80, mb1, nmb        ; more bits?
-    BPF_INST( 14, 0x01,   0,   0, 0x0000000c), // mb1: ldx #12                ; set base data offset
-    BPF_INST( 15, 0x30,   0,   0, 0x0000000b), // ldb [11]                    ; high byte of second it_present
-    BPF_INST( 16, 0x45,   0,  23, 0x00000080), // jset #0x80, mb2, nmb        ; more bits?
-    BPF_INST( 17, 0x01,   0,   0, 0x00000010), // mb2: ldx #16                ; set base data offset
-    BPF_INST( 18, 0x30,   0,   0, 0x0000000f), // ldb [15]                    ; high byte of third it_present
-    BPF_INST( 19, 0x45,   0,  23, 0x00000080), // jset #0x80, mb3, nmb        ; more bits?
-    BPF_INST( 20, 0x01,   0,   0, 0x00000014), // mb3: ldx #20                ; set base data offset
-    BPF_INST( 21, 0x30,   0,   0, 0x00000013), // ldb [19]                    ; high byte of fourth it_present
-    BPF_INST( 22, 0x45,  57,   0, 0x00000080), // jset #0x80, drop, nmb       ; too many bits!
-    BPF_INST( 23, 0x30,   0,   0, 0x00000004), // nmb: ldb [4]                ; low byte of first it_present
-    BPF_INST( 24, 0x45,   0,  30, 0x00000001), // jset #0x01, b0t, b0f        ; tsfn present?
-    BPF_INST( 25, 0x87,   0,   0, 0x00000000), // b0t: txa                    ; get data offset
-    BPF_INST( 26, 0x04,   0,   0, 0x0000000f), // add #15                     ; tsfn is 8 bytes, with 8 byte aligment
-    BPF_INST( 27, 0x54,   0,   0, 0xfffffff8), // and #0xfffffff8             ; mask to alignment
-    BPF_INST( 28, 0x07,   0,   0, 0x00000000), // tax                         ; update data offset
-    BPF_INST( 29, 0x30,   0,   0, 0x00000004), // ldb [4]                     ; low byte of first it_present
-    BPF_INST( 30, 0x45,   0,  37, 0x00000002), // b0f: jset #0x02, b1t, b1f   ; flags present?
-    BPF_INST( 31, 0x50,   0,   0, 0x00000000), // b1t: ldb [x + 0]            ; load flags byte
-    BPF_INST( 32, 0x45,  57,   0, 0x00000040), // jset #0x40, drop            ; drop if frame failed FCS check
-    BPF_INST( 33, 0x87,   0,   0, 0x00000000), // txa                         ; load data offset
-    BPF_INST( 34, 0x04,   0,   0, 0x00000001), // add #1                      ; flags is 1 byte
-    BPF_INST( 35, 0x07,   0,   0, 0x00000000), // tax                         ; update data offset
-    BPF_INST( 36, 0x30,   0,   0, 0x00000004), // ldb [4]                     ; low byte of first it_present
-    BPF_INST( 37, 0x45,   0,  42, 0x00000004), // b1f: jset #0x04, b2t, b2f   ; rate present?
-    BPF_INST( 38, 0x87,   0,   0, 0x00000000), // b2t: txa                    ; get data offset
-    BPF_INST( 39, 0x04,   0,   0, 0x00000001), // add #1                      ; rate is 1 byte
-    BPF_INST( 40, 0x07,   0,   0, 0x00000000), // tax                         ; update data offset
-    BPF_INST( 41, 0x30,   0,   0, 0x00000004), // ldb [4]                     ; low byte of first it_present
-    BPF_INST( 42, 0x45,   0,  48, 0x00000008), // b2f: jset #0x08, b3t, b3f   ; channel present?
-    BPF_INST( 43, 0x87,   0,   0, 0x00000000), // b3t: txa                    ; get data offset
-    BPF_INST( 44, 0x04,   0,   0, 0x00000005), // add #5                      ; channel isis 4 bytes, with 2 byte alignment
-    BPF_INST( 45, 0x54,   0,   0, 0xfffffffe), // and #0xfffffffe             ; mask to alignment
-    BPF_INST( 46, 0x07,   0,   0, 0x00000000), // tax                         ; update data offset
-    BPF_INST( 47, 0x30,   0,   0, 0x00000004), // ldb [4]                     ; low byte of first it_present
-    BPF_INST( 48, 0x45,   0,  53, 0x00000010), // b3f: jset #0x10, b4t, b4f   ; fhss present?
-    BPF_INST( 49, 0x87,   0,   0, 0x00000000), // b4t: txa                    ; get data offset
-    BPF_INST( 50, 0x04,   0,   0, 0x00000002), // add #2                      ; fhss  2 bytes
-    BPF_INST( 51, 0x07,   0,   0, 0x00000000), // tax                         ; update data offset
-    BPF_INST( 52, 0x30,   0,   0, 0x00000004), // ldb [4]                     ; low byte of first it_present
-    BPF_INST( 53, 0x45,   0,  56, 0x00000020), // b4f: jset #0x20, b5t, accept; signal present?
-    BPF_INST( 54, 0x50,   0,   0, 0x00000000), // b5t: ldb [x + 0]            ; load signal byte
-    BPF_INST( 55, 0x25,   0,  57, min_signal), // jle #0xc3, drop             ; drop if signal below threshold
-    BPF_INST( 56, 0x06,   0,   0, 0x00040000), // accept: ret #262144         ; truncate to snaplen
-    BPF_INST( 57, 0x06,   0,   0, 0x00000000), // drop: ret #0                ; drop the packet
-  };
-
-  struct sock_fprog prog = {
-    .len = sizeof(filter)/sizeof(filter[0]),
-    .filter = filter
-  };
-
-  return attach_filter(c, &prog);
 }
 
 static inline void set_inst(struct sock_filter *filter, int n, uint16_t code, uint8_t jt, uint8_t jf, uint32_t k) {
@@ -358,7 +278,7 @@ static inline void set_inst(struct sock_filter *filter, int n, uint16_t code, ui
   filter[n].k = k;
 }
 
-static int fast_filter(struct capture_s *c, const uint8_t *pkt, size_t pkt_sz) {
+static int calc_filter(struct capture_s *c, const uint8_t *pkt, size_t pkt_sz) {
   struct sock_filter filter[11];
   struct sock_fprog prog = { .len = 0, .filter = filter };
 
@@ -539,34 +459,13 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
   fprintf(stderr, " (%u octets)\n", h->incl_len);
 #endif
 
-  /* Even if a filter is set before the socket is bound to an interface,
-   * some packets still "leak" initially. We address this by setting an
-   * initial "filter" the accepts all packets, but truncates them to a single
-   * byte. Since no actual packets can be this small, this tells us that the
-   * filter is filtering, and we can set the "slow" filter.
-   *
-   * The slow filter parses the radiotap header in bpf which is rather
-   * tedious. When we get the first normal sized packet, we use it to
-   * initialize the "fast" filter, which computes and inlines the offsets we
-   * need to look at.
-   */
-  if (c->filter_state != 2) {
-    if ((c->filter_state == 1 && h->incl_len > 1) || c->linktype == DLT_IEEE802_11) {
-      debugp("setting fast filter");
-      if (fast_filter(c, pkt, pkt_sz) < 0) { exit(-1); }
-      c->filter_state = 2;
-    } else if (c->filter_state == 0) {
-      if (h->incl_len == 1) {
-        debugp("setting slow filter");
-        if (slow_filter(c) < 0) { exit(-1); }
-        c->filter_state = 1;
-      }
-
-      return;
-    } else {
-      debugp("waiting for slow filter to activate");
-      return;
-    }
+  // rather than trying to parse the radiotap header in the filter, we examine
+  // the radiotap header and generate an appropriate filter at runtime
+  if (c->wlan_offset == RT_OFFSET_UNKNOWN) {
+    debugp("setting fast filter");
+    if (calc_filter(c, pkt, pkt_sz) < 0) { exit(-1); }
+    // drop the unfiltered packet
+    return;
   }
 
   // are we filtering on ssid?
@@ -692,10 +591,6 @@ static int open_capture(struct capture_s *c, char *ifname) {
     return -1;
   }
 
-  if (one_filter(c) < 0) {
-    return -1;
-  }
-
   struct ifreq ifr = {0};
   if (init_ifreq(&ifr, ifname) < 0) return -1;
 
@@ -779,7 +674,6 @@ int main(int argc, char *argv[]) {
   struct addrinfo hints, *res, *ai;
   struct capture_s c[] = {0};
 
-  c->filter_state = 0;
   c->wlan_offset = RT_OFFSET_UNKNOWN;
   c->flags_offset = RT_OFFSET_UNKNOWN;
   c->signal_offset = RT_OFFSET_UNKNOWN;
