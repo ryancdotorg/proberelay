@@ -44,6 +44,8 @@ gcc -Os -std=gnu17 -Wall -Wextra -pedantic proberelay_nopcap.c -o proberelay_nop
 #include <linux/if_arp.h>
 #endif
 
+#include "rt_fields.h"
+
 #ifndef NDEBUG
 #include "debugp.h"
 #else
@@ -69,6 +71,7 @@ gcc -Os -std=gnu17 -Wall -Wextra -pedantic proberelay_nopcap.c -o proberelay_nop
 
 #define RT_OFFSET_UNKNOWN -1
 #define RT_OFFSET_NONE -2
+#define RT_OFFSET_ERROR -3
 
 #define TS_UNSET   0
 #define TS_KERNEL  1
@@ -169,68 +172,83 @@ static int arphdr_to_dlt(int arphdr) {
   return dlt;
 }
 
-static int rt_flags_offset(const uint8_t *pkt) {
-  int flags_offset = RT_OFFSET_NONE, p = 1;
+// indirection expands arguments
+#define RT_FIELD_CHECK(...) _RT_FIELD_CHECK(__VA_ARGS__)
+#define _RT_FIELD_CHECK(N, W, A) { \
+  unsigned _n = (N); \
+  if (field == _n) break; \
+  if (it_present & (1 << _n)) { \
+    field_offset += W + (A - 1); \
+    field_offset &= ~(A - 1); \
+  } \
+}
+
+static int rt_field_offset(const uint8_t *pkt, unsigned field) {
+  int field_offset = RT_OFFSET_NONE, p = 1;
   uint32_t *radiotap = (uint32_t *)pkt;
   uint32_t it_present = le32toh(radiotap[p]);
 
-  // check whether bit 1 (flags) is set in the it_present bitmask
-  if (it_present & (1<<1)) {
-    // check whether bit 0 (tsft) is set in the it_present bitmask
-    bool has_tsft = it_present & (1<<0);
+  // check whether the field bit is set in the it_present bitmask
+  if (it_present & (1 << field)) {
+    // high bit indicates another it_present bitmask
+    while (le32toh(radiotap[p]) & (1<<31)) { ++p; }
 
-    // high bit indicates another it_present bitmasks
-    while (it_present & (1<<31)) {
-      it_present = le32toh(radiotap[++p]);
-    }
-    // end of it_present bitmasks
+    field_offset = 4 + 4 * p;
 
-    flags_offset = 4 + 4 * p;
-    // tsft is 8 bytes and must be aligned to a multiple of 8 bytes
-    if (has_tsft) flags_offset = (flags_offset + 15) & (~7);
-    printf("Found radiotap flags offset: %d\n", flags_offset);
+    do {
+      RT_FIELD_CHECK(RT_TSFT_PARAMS);
+      RT_FIELD_CHECK(RT_FLAGS_PARAMS);
+      RT_FIELD_CHECK(RT_RATE_PARAMS);
+      RT_FIELD_CHECK(RT_CHANNEL_PARAMS);
+      RT_FIELD_CHECK(RT_FHSS_PARAMS);
+      RT_FIELD_CHECK(RT_DBM_SIGNAL_PARAMS);
+      RT_FIELD_CHECK(RT_DBM_NOISE_PARAMS);
+      RT_FIELD_CHECK(RT_LOCK_QUALITY_PARAMS);
+      RT_FIELD_CHECK(RT_TX_ATTENUATION_PARAMS);
+      RT_FIELD_CHECK(RT_DB_TX_ATTENUATION_PARAMS);
+      RT_FIELD_CHECK(RT_DBM_TX_POWER_PARAMS);
+      RT_FIELD_CHECK(RT_ANTENNA_PARAMS);
+      RT_FIELD_CHECK(RT_DB_SIGNAL_PARAMS);
+      RT_FIELD_CHECK(RT_DB_NOISE_PARAMS);
+      RT_FIELD_CHECK(RT_RX_FLAGS_PARAMS);
+      RT_FIELD_CHECK(RT_TX_FLAGS_PARAMS);
+      RT_FIELD_CHECK(RT_RTS_RETRIES_PARAMS);
+      RT_FIELD_CHECK(RT_DATA_RETRIES_PARAMS);
+      RT_FIELD_CHECK(RT_XCHANNEL_PARAMS);
+      RT_FIELD_CHECK(RT_MCS_PARAMS);
+      RT_FIELD_CHECK(RT_A_MPDU_STATUS_PARAMS);
+      RT_FIELD_CHECK(RT_VHT_PARAMS);
+      RT_FIELD_CHECK(RT_TIMESTAMP_PARAMS);
+      RT_FIELD_CHECK(RT_HE_PARAMS);
+      RT_FIELD_CHECK(RT_HE_MU_PARAMS);
+      RT_FIELD_CHECK(RT_HE_MU_OTHER_USER_PARAMS);
+      RT_FIELD_CHECK(RT_ZERO_LENGTH_PSDU_PARAMS);
+      RT_FIELD_CHECK(RT_L_SIG_PARAMS);
+
+      return RT_OFFSET_ERROR;
+    } while (0);
+
+    printf("Found radiotap field %u offset: %d\n", field, field_offset);
   }
 
-  return flags_offset;
+  return field_offset;
 }
 
-static int rt_signal_offset(const uint8_t *pkt) {
-  int signal_offset = RT_OFFSET_NONE, p = 1;
-  uint32_t *radiotap = (uint32_t *)pkt;
-  uint32_t it_present = le32toh(radiotap[p]);
+static inline int _set_filter(int fd, struct sock_fprog *prog) {
+  return setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER, prog, sizeof(struct sock_fprog));
+}
 
-  // check whether bit 5 (antenna signal) is set in the it_present bitmask
-  if (it_present & (1<<5)) {
-    // check whether bit 0 (tsft) is set in the it_present bitmask
-    bool has_tsft = it_present & (1<<0);
-    bool has_flags = it_present & (1<<1);
-    bool has_rate = it_present & (1<<2);
-    bool has_channel = it_present & (1<<3);
-    bool has_fhss = it_present & (1<<4);
+// wrapper to attach a filter without leaking unfiltered packets
+// https://natanyellin.com/posts/ebpf-filtering-done-right/
+static int attach_filter(struct capture_s *c, struct sock_fprog *prog) {
+  // drop all
+  struct sock_fprog drop = { 1, &(struct sock_filter){ 6, 0, 0, 0 } };
 
-    // high bit indicates another it_present bitmasks
-    while (it_present & (1<<31)) {
-      it_present = le32toh(radiotap[++p]);
-    }
-    // end of it_present bitmasks
-
-    signal_offset = 4 + 4 * p;
-
-    // tsft is 8 bytes and must be aligned to a multiple of 8 bytes
-    if (has_tsft) signal_offset = (signal_offset + 15) & (~7);
-    // flags is 1 byte
-    if (has_flags) signal_offset = (signal_offset + 1);
-    // rate is 1 byte
-    if (has_rate) signal_offset = (signal_offset + 1);
-    // channel is 4 bytes and must be aligned to a multiple of 2 bytes
-    if (has_channel) signal_offset = (signal_offset + 5) & (~1);
-    // fhss is 2 bytes
-    if (has_fhss) signal_offset = (signal_offset + 1);
-    printf("Found radiotap signal offset: %d\n", signal_offset);
+  if (_set_filter(c->cap_fd, &drop) < 0) {
+    perror("setsockopt (attach drop)");
+    return -1;
   }
 
-  return signal_offset;
-}
 
 static int attach_filter(struct capture_s *c, struct sock_fprog *prog) {
 #ifndef NDEBUG
@@ -350,9 +368,9 @@ static int fast_filter(struct capture_s *c, const uint8_t *pkt, size_t pkt_sz) {
     c->wlan_offset = le16toh(*((uint16_t *)(pkt + 2)));
     printf("Found radiotap header length: %d\n", c->wlan_offset);
     // find the flags offset (if present)
-    c->flags_offset = rt_flags_offset(pkt);
+    c->flags_offset = rt_field_offset(pkt, RT_FLAGS);
     // find the signal offset (if present);
-    c->signal_offset = rt_signal_offset(pkt);
+    c->signal_offset = rt_field_offset(pkt, RT_DBM_SIGNAL);
   } else {
     c->wlan_offset = 0;
     c->flags_offset = RT_OFFSET_NONE;
