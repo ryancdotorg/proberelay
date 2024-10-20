@@ -232,7 +232,7 @@ static inline int attach_filter(int fd, struct sock_fprog *prog) {
 // https://natanyellin.com/posts/ebpf-filtering-done-right/
 static int apply_filter(struct capture_s *c, struct sock_fprog *prog) {
   // drop all
-  struct sock_fprog drop = { 1, &(struct sock_filter){ 6, 0, 0, 0 } };
+  struct sock_fprog drop = { 1, &(struct sock_filter){ BPF_RET, 0, 0, 0 } };
 
   if (attach_filter(c->cap_fd, &drop) < 0) {
     perror("setsockopt (attach drop)");
@@ -536,15 +536,44 @@ static int droproot() {
   return rv;
 }
 
-static int init_ifreq(struct ifreq *ifr, const char *ifname) {
+static int bind_ifname(struct capture_s *c, const char *ifname) {
   size_t ifname_len = strlen(ifname);
-  if (ifname_len < sizeof(ifr->ifr_name)) {
-    memcpy(ifr->ifr_name, ifname, ifname_len);
-    ifr->ifr_name[ifname_len] = 0;
-    return 0;
+
+  struct ifreq ifr;
+  if (ifname_len < sizeof(ifr.ifr_name)) {
+    memcpy(ifr.ifr_name, ifname, ifname_len);
+    ifr.ifr_name[ifname_len] = 0;
   } else {
     return -1;
   }
+
+  if (ioctl(c->cap_fd, SIOCGIFHWADDR, &ifr) < 0) {
+    perror("ioctl");
+    return -1;
+  }
+
+  if ((c->linktype = arphdr_to_dlt(ifr.ifr_hwaddr.sa_family)) < 0) {
+    fprintf(stderr, "Unsupported link type: %d\n", ifr.ifr_hwaddr.sa_family);
+    return -1;
+  }
+
+  if (ioctl(c->cap_fd, SIOCGIFINDEX, &ifr) < 0) {
+    perror("ioctl");
+    return -1;
+  }
+
+  struct sockaddr_ll addr;
+  addr.sll_family = AF_PACKET;
+  addr.sll_ifindex = ifr.ifr_ifindex;
+  addr.sll_protocol = htons(ETH_P_ALL);
+
+  int err;
+  if ((err = bind(c->cap_fd, (struct sockaddr*)&addr, sizeof(addr))) < 0) {
+    perror("bind");
+    return -1;
+  }
+
+  return ifr.ifr_ifindex;
 }
 
 static int promisc(int fd, int idx) {
@@ -579,38 +608,14 @@ static int timestamping(int fd, bool enable_hw) {
   return 0;
 }
 
-static int ifbind(int fd, int idx) {
-  struct sockaddr_ll addr = {0};
-  addr.sll_family = AF_PACKET;
-  addr.sll_ifindex = idx;
-  addr.sll_protocol = htons(ETH_P_ALL);
-
-  return bind(fd, (struct sockaddr*)&addr, sizeof(addr));
-}
-
-static int open_capture(struct capture_s *c, char *ifname) {
+static int open_capture(struct capture_s *c, const char *ifname) {
   if ((c->cap_fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL))) < 0) {
     perror("socket");
     return -1;
   }
 
-  struct ifreq ifr = {0};
-  if (init_ifreq(&ifr, ifname) < 0) return -1;
-
-  if (ioctl(c->cap_fd, SIOCGIFINDEX, &ifr) < 0) {
-    perror("ioctl");
-    return -1;
-  }
-
-  int idx = ifr.ifr_ifindex;
-
-  if (ioctl(c->cap_fd, SIOCGIFHWADDR, &ifr) < 0) {
-    perror("ioctl");
-    return -1;
-  }
-
-  if ((c->linktype = arphdr_to_dlt(ifr.ifr_hwaddr.sa_family)) < 0) {
-    fprintf(stderr, "Unsupported link type: %d\n", ifr.ifr_hwaddr.sa_family);
+  int idx;
+  if ((idx = bind_ifname(c, ifname)) < 0) {
     return -1;
   }
 
@@ -618,10 +623,6 @@ static int open_capture(struct capture_s *c, char *ifname) {
     if (timestamping(c->cap_fd, false) < 0) {
       return -1;
     }
-  }
-
-  if (ifbind(c->cap_fd, idx) < 0) {
-    return -1;
   }
 
   if (promisc(c->cap_fd, idx) < 0) {
