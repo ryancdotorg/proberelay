@@ -75,12 +75,16 @@ bin/test_%: src/%.c
 	@mkdir -p $(@D)
 	$(COMPILE) -DTEST $(DEBUG_FLAGS) $< $(LDFLAGS) -o $@
 
-bin/proberelay: obj/proberelay.o
+bin/test_escape: src/escape.c obj/bnprintf.o
+	@mkdir -p $(@D)
+	$(COMPILE) -DTEST $(DEBUG_FLAGS) $^ $(LDFLAGS) -o $@
+
+bin/proberelay: obj/proberelay.o obj/radiotap.o obj/escape.o obj/bnprintf.o
 	@mkdir -p $(@D)
 	$(COMPILE) $(RELEASE_FLAGS) $^ $(LDFLAGS) -o $@
 	$(STRIP) -s $@
 
-bin/proberelay_sym: obj/proberelay.o
+bin/proberelay_sym: obj/proberelay.o obj/radiotap.o obj/escape.o obj/bnprintf.o
 	@mkdir -p $(@D)
 	$(COMPILE) $(RELEASE_FLAGS) $^ $(LDFLAGS) -o $@
 

@@ -1,0 +1,64 @@
+ldb [3]                     ; high byte of it_len
+lsh #8                      ; left shift into place
+tax                         ; save it
+ldb [2]                     ; low byte of it_len
+add x                       ; calculate radiotap header len
+tax                         ; only x can be used as an offset
+ldb [x + 0]                 ; load first byte of frame control
+jset #0x0c, drop            ; drop if not management frame
+rsh #4                      ; extract subtype
+tax                         ; save for shift
+ldi #1                      ; set A to 1
+lsh x                       ; left shift A by x
+jset #0x0010, maybe, drop   ; mask allowed subtypes
+maybe: jne #0x40, notprobe  ; only do ssid check for probe requests
+ssid: ldh [x + 24]          ; type and length of first probe request TLV
+sub #1                      ; type needs to be 0, length 1-32
+jset #0xffe0, drop          ; bad type and/or length if any of these are set
+notprobe: ldx #8            ; set base data offset for radiotap header fields
+ldb [7]                     ; high byte of it_present
+jset #0x80, mb1, nmb        ; more bits?
+mb1: ldx #12                ; set base data offset
+ldb [11]                    ; high byte of second it_present
+jset #0x80, mb2, nmb        ; more bits?
+mb2: ldx #16                ; set base data offset
+ldb [15]                    ; high byte of third it_present
+jset #0x80, mb3, nmb        ; more bits?
+mb3: ldx #20                ; set base data offset
+ldb [19]                    ; high byte of fourth it_present
+jset #0x80, drop, nmb       ; too many bits!
+nmb: ldb [4]                ; low byte of first it_present
+jset #0x01, b0t, b0f        ; tsfn present?
+b0t: txa                    ; get data offset
+add #15                     ; tsfn is 8 bytes, with 8 byte aligment
+and #0xfffffff8             ; mask to alignment
+tax                         ; update data offset
+ldb [4]                     ; low byte of first it_present
+b0f: jset #0x02, b1t, b1f   ; flags present?
+b1t: ldb [x + 0]            ; load flags byte
+jset #0x40, drop            ; drop if frame failed FCS check
+txa                         ; load data offset
+add #1                      ; flags is 1 byte
+tax                         ; update data offset
+ldb [4]                     ; low byte of first it_present
+b1f: jset #0x04, b2t, b2f   ; rate present?
+b2t: txa                    ; get data offset
+add #1                      ; rate is 1 byte
+tax                         ; update data offset
+ldb [4]                     ; low byte of first it_present
+b2f: jset #0x08, b3t, b3f   ; channel present?
+b3t: txa                    ; get data offset
+add #5                      ; channel is 4 bytes, with 2 byte alignment
+and #0xfffffffe             ; mask to alignment
+tax                         ; update data offset
+ldb [4]                     ; low byte of first it_present
+b3f: jset #0x10, b4t, b4f   ; fhss present?
+b4t: txa                    ; get data offset
+add #2                      ; fhss is 2 bytes
+tax                         ; update data offset
+ldb [4]                     ; low byte of first it_present
+b4f: jset #0x20, b5t, accept; signal present?
+b5t: ldb [x + 0]            ; load signal byte
+jle #0xc3, drop             ; drop if signal below -80dBm
+accept: ret #262144         ; truncate to snaplen
+drop: ret #0                ; drop the packet

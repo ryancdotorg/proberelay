@@ -22,13 +22,25 @@ For example:
 
 The network interface must be in monitor mode.
 
-### Minimum Signal Strength
+### Filtering
+
+The socket filter looks for non-broadcast probe requests, and if possible,
+requires a valid frame checksum. This filter is generated at runtime by
+examining the first packet for a radiotap header, and parsing it. If there is
+no radiotap header, the filter will not validate frame checksums or be able to
+check signal strength.
+
+#### SSID Exclusion
+
+Does what it says on the tin. This is done in userspace.
+
+#### Minimum Signal Strength
 
 Radiotap has two fields for signal strength, one in standard dBm, and one in
 dB difference from “an arbitrary, fixed reference”. Negative values will be
 compared against dBm, zero or positive ones will be compared against dB.
 
-### Timestamping
+#### Timestamping
 
 Four modes are available:
 

@@ -35,13 +35,11 @@ gcc -Os -std=gnu17 -Wall -Wextra -pedantic proberelay.c -o proberelay #*/
 #include <linux/if_arp.h>
 #endif
 
-#include "rt_fields.h"
+#include "escape.h"
 
-#ifndef NDEBUG
-#include "debugp.h"
-#else
-#define debugp(...) do {} while (0)
-#endif
+#include "radiotap.h"
+
+#include "common.h"
 
 #ifndef BUILD_TIME
 #define BUILD_TIME __TIMESTAMP__
@@ -58,45 +56,12 @@ gcc -Os -std=gnu17 -Wall -Wextra -pedantic proberelay.c -o proberelay #*/
 #define BPF_INST(I, CODE, JT, JF, K) { CODE, _BPFJ(I, JT), _BPFJ(I, JF), K }
 #endif
 
-#define SIGNAL_NONE -128
-
-#define RT_OFFSET_UNKNOWN -1
-#define RT_OFFSET_NONE -2
-#define RT_OFFSET_ERROR -3
-
-#define TS_UNSET   0
-#define TS_KERNEL  1
-#define TS_SYSTEM  2
-#define TS_COARSE  3
-#define TS_NONE    4
-
-#define MTU 1500
-
-#define IP4_HDR_LEN 20
-#define IP6_HDR_LEN 40
-#define UDP_HDR_LEN  8
-
-#define PCAP_MAGIC_MICRO 0xA1B2C3D4
-#define PCAP_MAGIC_NANO  0xA1B23C4D
-
-#ifdef PCAP_USE_MICRO
-#define PCAP_MAGIC PCAP_MAGIC_MICRO
-// convert nanoseconds to microseconds
-#define TS_SCALE(X) ((X) / 1000)
-#else
-#define PCAP_MAGIC PCAP_MAGIC_NANO
-#define TS_SCALE(X) (X)
-#endif
-
 #ifndef DLT_IEEE802_11
 #define DLT_IEEE802_11       105 /* IEEE 802.11 wireless */
 #endif
 #ifndef DLT_IEEE802_11_RADIO
 #define DLT_IEEE802_11_RADIO 127 /* 802.11 plus radiotap radio header */
 #endif
-
-#define MIN(A, B) ((A) < (B) ? (A) : (B))
-#define MAX(A, B) ((A) > (B) ? (A) : (B))
 
 #ifndef SO_TIMESTAMPING_OLD
 #define SO_TIMESTAMPING_OLD 37
@@ -109,40 +74,6 @@ static int so_tstamp = SO_TIMESTAMPING_NEW;
 
 struct scm_timestamping {
   struct timespec ts[3];
-};
-
-/* 40 bytes - this is a pcap file header plus a packet record header */
-struct header_s {
-  /* PCAP FILE HEADER */
-  /*  0 */ uint32_t  magic_number;
-  /*  4 */ uint16_t  version_major;
-  /*  6 */ uint16_t  version_minor;
-  /*  8 */ int32_t   thiszone;
-  /* 12 */ uint32_t  sigfigs;
-  /* 16 */ uint32_t  snaplen;
-  /* 20 */ uint32_t  linktype;
-  /* PCAP PACKET RECORD */
-  /* 24 */ uint32_t  ts_sec;
-  /* 28 */ uint32_t  ts_fsec;
-  /* 32 */ uint32_t  incl_len;
-  /* 36 */ uint32_t  orig_len;
-  /* PCAP PACKET DATA */
-  /* 40 */ uint8_t   packet[];
-};
-
-// state object for packet handler callback
-struct capture_s {
-  struct addrinfo *ai;
-  int cap_fd;
-  int dst_fd;
-  int linktype;
-  int wlan_offset;
-  int flags_offset;
-  int signal_offset;
-  int tstamp_mode;
-  int min_signal;
-  uint32_t snaplen;
-  uint8_t exclude[1024];
 };
 
 static int arphdr_to_dlt(int arphdr) {
@@ -160,206 +91,6 @@ static int arphdr_to_dlt(int arphdr) {
   }
 
   return dlt;
-}
-
-// indirection expands arguments
-#define RT_FIELD_CHECK(...) _RT_FIELD_CHECK(__VA_ARGS__)
-#define _RT_FIELD_CHECK(N, W, A) { \
-  unsigned _n = (N); \
-  if (field == _n) break; \
-  if (it_present & (1 << _n)) { \
-    field_offset += W + (A - 1); \
-    field_offset &= ~(A - 1); \
-  } \
-}
-
-static int rt_field_offset(const uint8_t *pkt, unsigned field) {
-  int field_offset = RT_OFFSET_NONE, p = 1;
-  uint32_t *radiotap = (uint32_t *)pkt;
-  uint32_t it_present = le32toh(radiotap[p]);
-
-  // check whether the field bit is set in the it_present bitmask
-  if (it_present & (1 << field)) {
-    // high bit indicates another it_present bitmask
-    while (le32toh(radiotap[p]) & (1<<31)) { ++p; }
-
-    field_offset = 4 + 4 * p;
-
-    do {
-      RT_FIELD_CHECK(RT_TSFT_PARAMS);
-      RT_FIELD_CHECK(RT_FLAGS_PARAMS);
-      RT_FIELD_CHECK(RT_RATE_PARAMS);
-      RT_FIELD_CHECK(RT_CHANNEL_PARAMS);
-      RT_FIELD_CHECK(RT_FHSS_PARAMS);
-      RT_FIELD_CHECK(RT_DBM_SIGNAL_PARAMS);
-      RT_FIELD_CHECK(RT_DBM_NOISE_PARAMS);
-      RT_FIELD_CHECK(RT_LOCK_QUALITY_PARAMS);
-      RT_FIELD_CHECK(RT_TX_ATTENUATION_PARAMS);
-      RT_FIELD_CHECK(RT_DB_TX_ATTENUATION_PARAMS);
-      RT_FIELD_CHECK(RT_DBM_TX_POWER_PARAMS);
-      RT_FIELD_CHECK(RT_ANTENNA_PARAMS);
-      RT_FIELD_CHECK(RT_DB_SIGNAL_PARAMS);
-      RT_FIELD_CHECK(RT_DB_NOISE_PARAMS);
-      RT_FIELD_CHECK(RT_RX_FLAGS_PARAMS);
-      RT_FIELD_CHECK(RT_TX_FLAGS_PARAMS);
-      RT_FIELD_CHECK(RT_RTS_RETRIES_PARAMS);
-      RT_FIELD_CHECK(RT_DATA_RETRIES_PARAMS);
-      RT_FIELD_CHECK(RT_XCHANNEL_PARAMS);
-      RT_FIELD_CHECK(RT_MCS_PARAMS);
-      RT_FIELD_CHECK(RT_A_MPDU_STATUS_PARAMS);
-      RT_FIELD_CHECK(RT_VHT_PARAMS);
-      RT_FIELD_CHECK(RT_TIMESTAMP_PARAMS);
-      RT_FIELD_CHECK(RT_HE_PARAMS);
-      RT_FIELD_CHECK(RT_HE_MU_PARAMS);
-      RT_FIELD_CHECK(RT_HE_MU_OTHER_USER_PARAMS);
-      RT_FIELD_CHECK(RT_ZERO_LENGTH_PSDU_PARAMS);
-      RT_FIELD_CHECK(RT_L_SIG_PARAMS);
-
-      return RT_OFFSET_ERROR;
-    } while (0);
-
-    printf("Found radiotap field %u offset: %d\n", field, field_offset);
-  }
-
-  return field_offset;
-}
-
-static inline int attach_filter(int fd, struct sock_fprog *prog) {
-  return setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER, prog, sizeof(struct sock_fprog));
-}
-
-// wrapper to attach a filter without leaking unfiltered packets
-// https://natanyellin.com/posts/ebpf-filtering-done-right/
-static int apply_filter(struct capture_s *c, struct sock_fprog *prog) {
-  // drop all
-  struct sock_fprog drop = { 1, &(struct sock_filter){ BPF_RET, 0, 0, 0 } };
-
-  if (attach_filter(c->cap_fd, &drop) < 0) {
-    perror("setsockopt (attach drop)");
-    return -1;
-  }
-
-  // read until we get an error meaing no more data to read
-  for (int n = 0; n >= 0; n = recv(c->cap_fd, (void *)&drop, 1, MSG_DONTWAIT)) {}
-
-#ifndef NDEBUG
-  fprintf(stderr, "%u,", prog->len);
-  for (unsigned i = 0; i < prog->len; ++i) {
-    fprintf(
-      stderr, "%u %u %u %u,",
-      prog->filter[i].code, prog->filter[i].jt,
-      prog->filter[i].jf, prog->filter[i].k
-    );
-  }
-  fprintf(stderr, "\n");
-#endif
-
-  if (attach_filter(c->cap_fd, prog) < 0) {
-    perror("setsockopt (attach filter)");
-    return -1;
-  }
-
-  return 0;
-}
-
-static inline void set_inst(struct sock_filter *filter, int n, uint16_t code, uint8_t jt, uint8_t jf, uint32_t k) {
-  filter[n].code = code;
-  filter[n].jt = jt;
-  filter[n].jf = jf;
-  filter[n].k = k;
-}
-
-static int calc_filter(struct capture_s *c, const uint8_t *pkt, size_t pkt_sz) {
-  struct sock_filter filter[11];
-  struct sock_fprog prog = { .len = 0, .filter = filter };
-
-  // is there a radiotap header?
-  if (c->linktype == DLT_IEEE802_11_RADIO) {
-    // per radiotap spec
-    c->wlan_offset = le16toh(*((uint16_t *)(pkt + 2)));
-    // find the flags offset (if present)
-    c->flags_offset = rt_field_offset(pkt, RT_FLAGS);
-    // find the signal offset (if present);
-    if (c->min_signal < 0) {
-      c->signal_offset = rt_field_offset(pkt, RT_DBM_SIGNAL);
-    } else {
-      c->signal_offset = rt_field_offset(pkt, RT_DB_SIGNAL);
-    }
-  } else {
-    c->wlan_offset = 0;
-    c->flags_offset = RT_OFFSET_NONE;
-    c->signal_offset = RT_OFFSET_NONE;
-  }
-
-  int jflg, jsig;
-  if (c->flags_offset < 0) {
-    fprintf(stderr, "Unable to filter bad frame checksums.\n");
-    jflg = 0;
-  } else {
-    jflg = 2;
-  }
-
-  if (c->min_signal != SIGNAL_NONE && c->signal_offset >= 0) {
-    fprintf(stderr, "Unable to filter on signal.\n");
-    jsig = 0;
-  } else {
-    jsig = 2;
-  }
-
-  int i = 0;
-
-  // ldb[c->wlan_offset]        ; load first byte of frame control
-  // BPF_LD | BPF_B | BPF_ABS
-  set_inst(filter, i++, 0x30, 0, 0, c->wlan_offset);
-  // jne #0x40, drop            ; drop everything except probe requests
-  // BPF_JMP | BPF_JEQ
-  set_inst(filter, i++, 0x15, 0, jsig + jflg + 4, 0x40);
-  // ldh[c->wlan_offset + 24]   ; type and length of first probe request TLV
-  // BPF_LD | BPF_H | BPF_ABS
-  set_inst(filter, i++, 0x28, 0, 0, c->wlan_offset + 24);
-  // sub #1                     ; type needs to be 0, length 1-32
-  // BPF_ALU | BPF_SUB
-  set_inst(filter, i++, 0x14, 0, 0, 1);
-  // jset #0xffe0, drop         ; bad type and/or length if any of these are
-  // BPF_JMP | BPF_JSET
-  set_inst(filter, i++, 0x45, jsig + jflg + 1, 0, 0xffe0);
-  if (jsig > 0) {
-    // ldb [c->signal_offset]   ; radiotap signal byte
-    // BPF_LD | BPF_B | BPF_ABS
-    set_inst(filter, i++, 0x30, 0, 0, c->signal_offset);
-    // jlt #c->min_signal, drop ; drop if less than specified signal
-    // BPF_JMP | BPF_JGE
-    set_inst(filter, i++, 0x35, 0, jflg + 1, c->min_signal & 0xff);
-  }
-  if (jflg > 0) {
-    // ldb [c->flags_offset]    ; radiotap flags byte
-    // BPF_LD | BPF_B | BPF_ABS
-    set_inst(filter, i++, 0x30, 0, 0, c->flags_offset);
-    // jset #0x40, drop         ; drop if frame failed FCS check
-    // BPF_JMP | BPF_JSET
-    set_inst(filter, i++, 0x45, 1, 0, 0x40);
-  }
-  // accept: ret c->snaplen     ; truncate to snaplen
-  // BPF_RET
-  set_inst(filter, i++, 0x06, 0, 0, c->snaplen);
-  // drop: ret #0               ; drop the packet
-  // BPF_RET
-  set_inst(filter, i++, 0x06, 0, 0, 0);
-
-  prog.len = i;
-
-  if (apply_filter(c, &prog) < 0) {
-    return -1;
-  }
-
-  int lock = 1;
-  if (setsockopt(c->cap_fd, SOL_SOCKET, SO_LOCK_FILTER, &lock, sizeof(lock)) < 0) {
-    perror("setsockopt (lock filter)");
-    return -1;
-  }
-
-  // return packet length
-  return MAX(c->snaplen, pkt_sz);
 }
 
 static int read_kernel_tstamp(struct header_s *h, struct msghdr *msg) {
@@ -464,10 +195,32 @@ void send_packet(struct capture_s *c, const uint8_t *buf) {
   }
 }
 
-void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
-  struct header_s *h = (struct header_s *)buf;
-  uint8_t *pkt = h->packet;
-  size_t pkt_sz = buf_sz - sizeof(struct header_s);
+void log_packet(struct capture_s *c, const uint8_t *buf) {
+  const struct header_s *h = (struct header_s *)buf;
+  const uint8_t *pkt = h->packet;
+
+  char str[32*6+1];
+  size_t pkt_ssid_sz = pkt[c->wlan_offset + 24];
+  const uint8_t *pkt_ssid = pkt + c->wlan_offset + 25;
+
+  json_escape(str, sizeof(str), pkt_ssid, pkt_ssid_sz);
+
+  int signal = get_signal(c, pkt);
+  int channel = get_channel(c, pkt);
+
+  fprintf(
+      stderr,
+      "%02x:%02x:%02x:%02x:%02x:%02x %d %u %s %s\n",
+      pkt[c->wlan_offset + 10], pkt[c->wlan_offset + 11],
+      pkt[c->wlan_offset + 12], pkt[c->wlan_offset + 13],
+      pkt[c->wlan_offset + 14], pkt[c->wlan_offset + 15],
+      signal, channel, c->ifname, str
+    );
+}
+
+void handle_packet(struct capture_s *c, const uint8_t *buf) {
+  const struct header_s *h = (struct header_s *)buf;
+  const uint8_t *pkt = h->packet;
 
 #ifndef NDEBUG
   fprintf(stderr, "got packet: ");
@@ -481,7 +234,7 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
   // the radiotap header and generate an appropriate filter at runtime
   if (c->wlan_offset == RT_OFFSET_UNKNOWN) {
     debugp("setting filter");
-    if (calc_filter(c, pkt, pkt_sz) < 0) { exit(-1); }
+    if (calc_filter(c, pkt, h->incl_len) < 0) { exit(-1); }
     // drop the unfiltered packet
     return;
   }
@@ -489,7 +242,7 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
   // are we filtering on ssid?
   if (c->exclude[0] > 0 && pkt[c->wlan_offset] == 0x40) {
     unsigned exclude_len, exclude_pos = 0;
-    uint8_t *ssid = pkt + c->wlan_offset + 25;
+    const uint8_t *ssid = pkt + c->wlan_offset + 25;
 
     while ((exclude_len = c->exclude[exclude_pos]) > 0) {
       if (memcmp(ssid, c->exclude + exclude_pos, exclude_len + 1) == 0) {
@@ -503,6 +256,7 @@ void handle_packet(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
 
   debugp("send packet %p %p", (void *)c, buf);
   send_packet(c, buf);
+  //log_packet(c, buf);
 }
 
 // set uid/gid to nobody/nogroup
@@ -537,6 +291,7 @@ static int droproot() {
 }
 
 static int bind_ifname(struct capture_s *c, const char *ifname) {
+  c->ifname = ifname;
   size_t ifname_len = strlen(ifname);
 
   struct ifreq ifr;
@@ -650,7 +405,7 @@ int relay(struct capture_s *c) {
       if (captured) {
         ssize_t rv = read_raw(c, buf, sizeof(buf));
         if (rv > 0) {
-          handle_packet(c, buf, sizeof(buf));
+          handle_packet(c, buf);
         }
       } else {
         fprintf(stderr, "Unexpected poll response!\n");
@@ -680,9 +435,10 @@ int main(int argc, char *argv[]) {
 
   c->wlan_offset = RT_OFFSET_UNKNOWN;
   c->flags_offset = RT_OFFSET_UNKNOWN;
+  c->channel_offset = RT_OFFSET_UNKNOWN;
   c->signal_offset = RT_OFFSET_UNKNOWN;
   c->tstamp_mode = TS_UNSET;
-  c->min_signal = SIGNAL_NONE;
+  c->min_signal = SIGNAL_MIN_DBM;
   c->exclude[0] = '\0';
 
   char *ifname = NULL, *host = NULL, *port = NULL;
@@ -723,7 +479,7 @@ int main(int argc, char *argv[]) {
         }
         break;
       case 'r':
-        if (c->min_signal == SIGNAL_NONE) {
+        if (c->min_signal == SIGNAL_MIN_DBM) {
           c->min_signal = atoi(optarg);
           debugp("min signal: %d", c->min_signal);
           if (c->min_signal < -127 || c->min_signal > 255) {

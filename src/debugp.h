@@ -1,6 +1,11 @@
 #pragma once
 
 #ifndef NDEBUG
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <string.h>
+#include <errno.h>
 #define debugp(...) _debugp(__FILE__, __func__, __LINE__, __VA_ARGS__)
 static void _debugp(const char *file, const char *func, unsigned int line, const char *fmt, ...) {
   char f[256];

@@ -1,3 +1,7 @@
+#pragma once
+
+#include "common.h"
+
 #define RT_TSFT                          0
 #define RT_FLAGS                         1
 #define RT_RATE                          2
@@ -55,3 +59,7 @@
 #define RT_HE_MU_OTHER_USER_PARAMS      25,  6, 2
 #define RT_ZERO_LENGTH_PSDU_PARAMS      26,  6, 2
 #define RT_L_SIG_PARAMS                 27,  4, 2
+
+int calc_filter(struct capture_s *, const uint8_t *, size_t);
+int get_channel(struct capture_s *, const uint8_t *);
+int get_signal(struct capture_s *, const uint8_t *);
