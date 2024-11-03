@@ -112,7 +112,7 @@ static int read_kernel_tstamp(struct header_s *h, struct msghdr *msg) {
   return -1;
 }
 
-static ssize_t read_raw(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
+static ssize_t read_raw(const struct capture_s *c, uint8_t *buf, size_t buf_sz) {
   struct header_s *h = (struct header_s *)buf;
   uint8_t *pkt = h->packet;
   size_t pkt_sz = buf_sz - sizeof(struct header_s);
@@ -184,7 +184,7 @@ static ssize_t read_raw(struct capture_s *c, uint8_t *buf, size_t buf_sz) {
   return sizeof(struct header_s) + h->incl_len;
 }
 
-void send_packet(struct capture_s *c, const uint8_t *buf) {
+void send_packet(const struct capture_s *c, const uint8_t *buf) {
   const struct header_s *h = (struct header_s *)buf;
 
   // send the packet
@@ -195,27 +195,44 @@ void send_packet(struct capture_s *c, const uint8_t *buf) {
   }
 }
 
-void log_packet(struct capture_s *c, const uint8_t *buf) {
+int fprint_packet(FILE *f, const struct capture_s *c, const uint8_t *buf) {
+  static char last_ssid[33];
+  static double last_time = 0;
+
   const struct header_s *h = (struct header_s *)buf;
   const uint8_t *pkt = h->packet;
 
+  double time;
+  struct timespec ts;
+
   char str[32*6+1];
-  size_t pkt_ssid_sz = pkt[c->wlan_offset + 24];
-  const uint8_t *pkt_ssid = pkt + c->wlan_offset + 25;
+  size_t pkt_ssid_sz = pkt[c->wlan_offset + 25];
+  const uint8_t *pkt_ssid = pkt + c->wlan_offset + 26;
+
+  if (clock_gettime(CLOCK_MONOTONIC_COARSE, &ts) < 0) return -1;
+  time = ts.tv_sec + ts.tv_nsec * 1e-9;
+
+  // suppress duplicates
+  if (memcmp(last_ssid, pkt + c->wlan_offset + 25, pkt_ssid_sz + 1) == 0) {
+    if (time - last_time < 5) {
+      last_time = time;
+      return 0;
+    }
+  } else {
+    memcpy(last_ssid, pkt + c->wlan_offset + 25, pkt_ssid_sz + 1);
+  }
+
+  last_time = time;
 
   json_escape(str, sizeof(str), pkt_ssid, pkt_ssid_sz);
 
-  int signal = get_signal(c, pkt);
-  int channel = get_channel(c, pkt);
-
-  fprintf(
-      stderr,
-      "%02x:%02x:%02x:%02x:%02x:%02x %d %u %s %s\n",
-      pkt[c->wlan_offset + 10], pkt[c->wlan_offset + 11],
-      pkt[c->wlan_offset + 12], pkt[c->wlan_offset + 13],
-      pkt[c->wlan_offset + 14], pkt[c->wlan_offset + 15],
-      signal, channel, c->ifname, str
-    );
+  return fprintf(
+    f, "%02x:%02x:%02x:%02x:%02x:%02x \"%s\"\n",
+    pkt[c->wlan_offset + 10], pkt[c->wlan_offset + 11],
+    pkt[c->wlan_offset + 12], pkt[c->wlan_offset + 13],
+    pkt[c->wlan_offset + 14], pkt[c->wlan_offset + 15],
+    str
+  );
 }
 
 void handle_packet(struct capture_s *c, const uint8_t *buf) {
@@ -256,7 +273,9 @@ void handle_packet(struct capture_s *c, const uint8_t *buf) {
 
   debugp("send packet %p %p", (void *)c, buf);
   send_packet(c, buf);
-  //log_packet(c, buf);
+  if (c->log_file != NULL) {
+    fprint_packet(c->log_file, c, buf);
+  }
 }
 
 // set uid/gid to nobody/nogroup
@@ -425,6 +444,7 @@ void usage(FILE *f, char *argv0) {
     "  -x SSID                           ssid to ignore (multiple allowed)\n"
     "  -r SIGNAL                         minimum signal strength (-127 to 255)\n"
     "  -t kernel|system|coarse|none      timestamp type (default: kernel)\n"
+    "  -e                                log to stderr\n"
     , argv0
   );
 }
@@ -433,6 +453,7 @@ int main(int argc, char *argv[]) {
   struct addrinfo hints, *res, *ai;
   struct capture_s c[] = {0};
 
+  c->log_file = NULL;
   c->wlan_offset = RT_OFFSET_UNKNOWN;
   c->flags_offset = RT_OFFSET_UNKNOWN;
   c->channel_offset = RT_OFFSET_UNKNOWN;
@@ -446,7 +467,7 @@ int main(int argc, char *argv[]) {
   unsigned exclude_pos = 0;
 
   int opt;
-  while ((opt = getopt(argc, argv, "-d:i:r:p:t:x:hV")) >= 0) {
+  while ((opt = getopt(argc, argv, "-d:i:r:p:t:x:ehV")) >= 0) {
     switch (opt) {
       case 'h':
         usage(stdout, argv[0]);
@@ -454,6 +475,9 @@ int main(int argc, char *argv[]) {
       case 'V':
         printf("proberelay " VERSION VERSION_EXTRA " built " BUILD_TIME "\n");
         return 0;
+      case 'e':
+        c->log_file = stderr;
+        break;
       case 'i':
         if (ifname == NULL) {
           ifname = optarg;

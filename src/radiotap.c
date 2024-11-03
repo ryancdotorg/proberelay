@@ -255,7 +255,7 @@ int calc_filter(struct capture_s *c, const uint8_t *pkt, size_t pkt_sz) {
   return MAX(c->snaplen, pkt_sz);
 }
 
-int get_channel(struct capture_s *c, const uint8_t *pkt) {
+int get_channel(const struct capture_s *c, const uint8_t *pkt) {
   if (c->channel_offset < 0) { return 0; }
 
   uint16_t freq = le16toh(*((uint16_t *)(pkt + c->channel_offset)));
@@ -266,7 +266,7 @@ int get_channel(struct capture_s *c, const uint8_t *pkt) {
   else { return freq; }
 }
 
-int get_signal(struct capture_s *c, const uint8_t *pkt) {
+int get_signal(const struct capture_s *c, const uint8_t *pkt) {
   if (c->signal_offset < 0) { return 0; }
 
   // c->min_signal is non-negative if dB values are being used

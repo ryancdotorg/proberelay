@@ -61,5 +61,5 @@
 #define RT_L_SIG_PARAMS                 27,  4, 2
 
 int calc_filter(struct capture_s *, const uint8_t *, size_t);
-int get_channel(struct capture_s *, const uint8_t *);
-int get_signal(struct capture_s *, const uint8_t *);
+int get_channel(const struct capture_s *, const uint8_t *);
+int get_signal(const struct capture_s *, const uint8_t *);

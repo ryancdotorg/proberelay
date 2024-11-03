@@ -4,7 +4,7 @@ export LANG=C LC_ALL=C
 
 .PHONY: all clean _clean _nop
 
-C ?= gcc
+CC ?= gcc
 AS ?= gcc
 PP ?= cpp
 LD ?= ld
@@ -88,7 +88,7 @@ bin/proberelay_sym: obj/proberelay.o obj/radiotap.o obj/escape.o obj/bnprintf.o
 	@mkdir -p $(@D)
 	$(COMPILE) $(RELEASE_FLAGS) $^ $(LDFLAGS) -o $@
 
-bin/proberelay_debug: obj/proberelay_debug.o
+bin/proberelay_debug: obj/proberelay_debug.o obj/radiotap_debug.o obj/escape_debug.o obj/bnprintf_debug.o
 	@mkdir -p $(@D)
 	$(COMPILE) $(DEBUG_FLAGS) $^ $(LDFLAGS) -o $@
 

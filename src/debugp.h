@@ -7,6 +7,8 @@
 #include <string.h>
 #include <errno.h>
 #define debugp(...) _debugp(__FILE__, __func__, __LINE__, __VA_ARGS__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 static void _debugp(const char *file, const char *func, unsigned int line, const char *fmt, ...) {
   char f[256];
   va_list args;
@@ -28,6 +30,7 @@ static void _debugp(const char *file, const char *func, unsigned int line, const
   vfprintf(stderr, f, args);
   fprintf(stderr, "\n");
 }
+#pragma GCC diagnostic pop
 #else
 #define debugp(...) do {} while (0)
 #endif

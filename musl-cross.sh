@@ -28,7 +28,7 @@ function setcross() {
     export RANLIB=$CROSS_PFX-ranlib
 
     export PATH=$CROSS_BIN:$ORIG_PATH
-    export STRIP="$CROSS_PFX-strip -s -R .comment -R .hash -R .gnu.hash"
+    export STRIP="$CROSS_PFX-strip -s -R .comment -R .hash -R .gnu.hash -R .gnu.version --strip-unneeded"
     export LDFLAGS="-flto -Wl,--gc-sections"
     export CFLAGS="-flto -fno-inline-small-functions -ffunction-sections -fdata-sections -Wl,--gc-sections -static -Os"
     export CXXFLAGS="$CFLAGS"

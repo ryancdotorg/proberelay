@@ -73,6 +73,7 @@ struct capture_s {
   struct addrinfo *ai;
   int cap_fd;
   int dst_fd;
+  FILE *log_file;
   int linktype;
   int wlan_offset;
   int flags_offset;
